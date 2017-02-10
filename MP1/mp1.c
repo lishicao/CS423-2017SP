@@ -26,33 +26,46 @@ struct mp1_list {
 #define DEBUG 1
 static ssize_t mp1_read (struct file *file, char __user *buffer, size_t count, loff_t *data){
 // implementation goes here...
- 
-  printk(KERN_ALERT "read function is called!!!");
   int copied = 0;
   char * buf;
-  buf = (char *) kmalloc(count,GFP_KERNEL); 
+  int total = 0;
+  struct list_head* n = head.next;
+  int offset = 0;
+  if (flag == 0) {
+    flag = 1;
+    return 0;
+  } 
+  printk(KERN_ALERT "read function is called!!!");
+  buf = (char *) kmalloc(1000,GFP_KERNEL); 
+  while (n != &head) {
+    strcpy(buf+offset, list_entry(n, struct mp1_list, list)->pid_ptr);
+    offset = strlen(buf);
+    n = n->next;
+  }
   copied = strlen(buf)+1;
   printk(KERN_ALERT "Size %d\n", copied);
   copy_to_user(buffer, buf, copied);
   kfree(buf);
   printk(KERN_ALERT "%d\t%d\n", count, copied);
+  flag = 0;
   return copied;
 
 }
 static ssize_t mp1_write (struct file *file, const char __user *buffer, size_t count, loff_t *data){ // implementation goes here...
 
-  printk(KERN_ALERT "write function is called");
   int copied;
+  struct mp1_list* new_node;
   char * buf;
+  printk(KERN_ALERT "write function is called");
   buf = (char *) kmalloc(count+1,GFP_KERNEL); 
   copied = 0;
   copy_from_user(buffer, buf, count);
   LIST_HEAD(node);
-  mp1_list* new_node = kmalloc(sizeof(list_head)+sizeof(int)+sizeof(char*), GFP_KERNEL);
+  new_node  = kmalloc(sizeof(struct list_head)+sizeof(int)+sizeof(char*), GFP_KERNEL);
   new_node->pid_ptr = buf;
   new_node->list = node;
   new_node->start_time = 1337;
-  list_add(node, head);
+  list_add(&node, &head);
   printk(KERN_ALERT "%x\n", *buffer);
   // kfree(buf);
   
@@ -88,13 +101,14 @@ void __exit mp1_exit(void)
   printk(KERN_ALERT "MP1 MODULE UNLOADING\n");
   #endif
   // Insert your code here ...
+  struct list_head* n = head.next; 
+  struct mp1_list* ptr;
   remove_proc_entry("status", proc_dir);
   remove_proc_entry("mp1", NULL);
-  list_head n = head.next; 
   while (n != &head) {
-    my_list* ptr = list_entry(n, mp1_list, list);
+    ptr = list_entry(n, struct mp1_list, list);
     kfree(ptr->pid_ptr);
-    n = list_entry(n->next, mp1_list, list);
+    n = list_entry(n->next, struct mp1_list, list);
     kfree(ptr);
   }
 
