@@ -19,13 +19,14 @@ LIST_HEAD(head);
 
 struct mp1_list {
   struct list_head list;
-  int start_time;
+  unsigned long start_time;
   char* pid_ptr;
 };
 
 #define DEBUG 1
 static ssize_t mp1_read (struct file *file, char __user *buffer, size_t count, loff_t *data){
 // implementation goes here...
+/*
   int copied = 0;
   char * buf;
   int total = 0;
@@ -49,7 +50,8 @@ static ssize_t mp1_read (struct file *file, char __user *buffer, size_t count, l
   printk(KERN_ALERT "%d\t%d\n", count, copied);
   flag = 0;
   return copied;
-
+*/
+  return 0;
 }
 static ssize_t mp1_write (struct file *file, const char __user *buffer, size_t count, loff_t *data){ // implementation goes here...
 
@@ -57,19 +59,23 @@ static ssize_t mp1_write (struct file *file, const char __user *buffer, size_t c
   struct mp1_list* new_node;
   char * buf;
   printk(KERN_ALERT "write function is called");
+  printk(KERN_ALERT "input count = %d\n", count);
   buf = (char *) kmalloc(count+1,GFP_KERNEL); 
   copied = 0;
-  copy_from_user(buffer, buf, count);
-  LIST_HEAD(node);
-  new_node  = kmalloc(sizeof(struct list_head)+sizeof(int)+sizeof(char*), GFP_KERNEL);
+  copy_from_user(buf, buffer, count);
+  buf[count] = '\0';
+  new_node  = kmalloc(sizeof(struct mp1_list), GFP_KERNEL);
   new_node->pid_ptr = buf;
-  new_node->list = node;
   new_node->start_time = 1337;
-  list_add(&node, &head);
-  printk(KERN_ALERT "%x\n", *buffer);
+  INIT_LIST_HEAD(&new_node->list);
+  list_add(&new_node->list, &head);
+  printk("%d \n", ((struct mp1_list*)head.next)->start_time);
+  struct mp1_list* test;
+  test = (struct mp1_list*) (head.next);
+
   // kfree(buf);
   
-  return 1;
+  return count;
 
 }
 
@@ -105,13 +111,14 @@ void __exit mp1_exit(void)
   struct mp1_list* ptr;
   remove_proc_entry("status", proc_dir);
   remove_proc_entry("mp1", NULL);
+/*
   while (n != &head) {
-    ptr = list_entry(n, struct mp1_list, list);
+    ptr = (struct mp1_list*) n;
     kfree(ptr->pid_ptr);
-    n = list_entry(n->next, struct mp1_list, list);
+    n = n.next;
     kfree(ptr);
   }
-
+*/
   printk(KERN_ALERT "MP1 MODULE UNLOADED\n");
 }
 
