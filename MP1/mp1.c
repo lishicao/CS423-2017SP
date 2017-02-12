@@ -7,14 +7,15 @@
 #include "mp1_given.h"
 #include <linux/list.h>
 #include <asm/uaccess.h>
+#include <linux/timer.h>
 
 static struct proc_dir_entry *proc_dir;
+static struct timer_list timer;
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Group_ID");
 MODULE_DESCRIPTION("CS-423 MP1");
 
-int flag = 1;
 LIST_HEAD(head);
 
 struct mp1_list {
@@ -23,26 +24,26 @@ struct mp1_list {
   char* pid_ptr;
 };
 
+int flag = 1;
 #define DEBUG 1
 static ssize_t mp1_read (struct file *file, char __user *buffer, size_t count, loff_t *data){
 // implementation goes here...
-/*
+  printk(KERN_ALERT "read function is called!!! %d", count);
   int copied = 0;
   char * buf;
-  int total = 0;
-  struct list_head* n = head.next;
+  struct mp1_list *entry;
   int offset = 0;
   if (flag == 0) {
     flag = 1;
     return 0;
   } 
-  printk(KERN_ALERT "read function is called!!!");
   buf = (char *) kmalloc(1000,GFP_KERNEL); 
-  while (n != &head) {
-    strcpy(buf+offset, list_entry(n, struct mp1_list, list)->pid_ptr);
+
+  list_for_each_entry(entry, &head, list) {
+    strcpy(buf+offset, entry->pid_ptr);
     offset = strlen(buf);
-    n = n->next;
   }
+
   copied = strlen(buf)+1;
   printk(KERN_ALERT "Size %d\n", copied);
   copy_to_user(buffer, buf, copied);
@@ -50,8 +51,7 @@ static ssize_t mp1_read (struct file *file, char __user *buffer, size_t count, l
   printk(KERN_ALERT "%d\t%d\n", count, copied);
   flag = 0;
   return copied;
-*/
-  return 0;
+
 }
 static ssize_t mp1_write (struct file *file, const char __user *buffer, size_t count, loff_t *data){ // implementation goes here...
 
@@ -79,6 +79,13 @@ static ssize_t mp1_write (struct file *file, const char __user *buffer, size_t c
 
 }
 
+void timer_callback( unsigned long data )
+{
+    printk( "timer_callback called (%ld).\n", jiffies );
+    setup_timer( &timer, timer_callback, 0 );
+    mod_timer( &timer, jiffies + msecs_to_jiffies(5000) );
+}
+
 static const struct file_operations mp1_file = {
   .owner = THIS_MODULE, 
   .read = mp1_read,
@@ -94,8 +101,9 @@ int __init mp1_init(void)
    // Insert your code here ...
   proc_dir =  proc_mkdir("mp1",NULL);
   proc_create("status",0666, proc_dir, &mp1_file);  
-   
-   
+  
+  setup_timer( &timer, timer_callback, 0 ); 
+  mod_timer( &timer, jiffies + msecs_to_jiffies(5000) ); 
    printk(KERN_ALERT "MP1 MODULE LOADED\n");
    return 0;   
 }
@@ -111,14 +119,14 @@ void __exit mp1_exit(void)
   struct mp1_list* ptr;
   remove_proc_entry("status", proc_dir);
   remove_proc_entry("mp1", NULL);
-/*
+
   while (n != &head) {
     ptr = (struct mp1_list*) n;
     kfree(ptr->pid_ptr);
-    n = n.next;
+    n = n->next;
     kfree(ptr);
   }
-*/
+  del_timer( &timer );
   printk(KERN_ALERT "MP1 MODULE UNLOADED\n");
 }
 
