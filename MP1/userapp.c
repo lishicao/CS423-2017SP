@@ -6,7 +6,14 @@ void call_kernel();
 
 int main(int argc, char* argv[])
 {
-	
+  /*
+  printf("%d\n", (int) sizeof(argv));
+  if((int) sizeof(argv)<3){
+    printf("Usage: ./userapp repeat_time number\n"); 
+    exit(1);
+  }
+  */
+    
 	int time_factorial = atoi(argv[1]);
 	int value_factorial = atoi(argv[2]);
 
@@ -21,9 +28,9 @@ int main(int argc, char* argv[])
 	printf("Factorial and call kernel starts, this test has %d rounds.\n", time_factorial);
 	while(time_factorial--!=0){
 		factorial(value_factorial);
-		call_kernel();
+//		call_kernel();
 	}
-
+	call_kernel();
 	return 0;
 }
 
