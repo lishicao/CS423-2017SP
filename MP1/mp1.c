@@ -178,7 +178,7 @@ int __init mp1_init(void)
   setup_timer( &timer, _timer_callback, 0 ); 
   mod_timer( &timer, jiffies + msecs_to_jiffies(5000) ); 
   
-  mp1_q = create_singlethread_workqueue("mp_queue");
+  mp1_q = create_workqueue("mp_queue");
   INIT_WORK(&bottom_work, &bottom_fn);
   printk(KERN_ALERT "MP1 MODULE LOADED\n");
 
