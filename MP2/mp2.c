@@ -10,7 +10,7 @@
 #include <linux/timer.h>
 #include <linux/workqueue.h>
 #include <linux/spinlock.h>
-
+#include <linux/kthread.h>
 
 /**
 static variables and struct
@@ -20,10 +20,11 @@ static struct timer_list timer;
 static struct work_struct bottom_work;
 static struct kmem_cache *mp_task_struct_cache;
 static struct task_struct *dispatcher;
-static struct mp_task_struct *running_task;
+static struct mp_task_struct *running_mptask;
 
 struct workqueue_struct *mp_q;
 static spinlock_t mylock;
+
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Group_10");
@@ -38,19 +39,20 @@ LIST_HEAD(head);
 /**
 Linked list struct to store registered pid and corresponding cpt time
 */
+/*
 struct mp_list {
   struct list_head list;
   unsigned long cpu_time;
   long pid;
 };
-
+*/
 /**
  * Augmented Task Struct
 */
 struct mp_task_struct
 {
   struct task_struct *task;
-	struct list_head task_node;
+  struct list_head task_node;
   struct timer_list task_timer;
 
   unsigned int task_state;
@@ -158,6 +160,23 @@ static ssize_t mp_write (struct file *file, const char __user *buffer, size_t co
   return count;
 }
 
+
+int admission_control(struct mp_task_struct* new_task) {
+  unsigned long total_util = new_task->processing_time * 1000000 / new_task->period;
+
+  struct mp_task_struct* entry;
+  // critical section begin
+  spin_lock(&mylock);
+  list_for_each_entry(entry, &head, task_node) {
+    total_util += (entry->processing_time * 1000000) / entry->period;
+  }
+  spin_unlock(&mylock);
+  // critical section end
+  if (total_util <= 693000) return 1;
+  else return 0;
+}
+
+
 void registration(char* buf) {
   struct mp_task_struct* new_task;
   new_task = (struct mp_task_struct*) kmem_cache_alloc(mp_task_struct_cache, GFP_KERNEL);
@@ -172,6 +191,7 @@ void registration(char* buf) {
   new_task->task_state = SLEEPING;
 
   // admission control
+  if (!admission_control(new_task)) return;
 
   // critical section begin
   spin_lock(&mylock);
@@ -182,23 +202,18 @@ void registration(char* buf) {
 
 int de_registration(int pid)
 {
-  struct mp_task_struct *entry;
-  struct mp_task_struct *temp_entry;
   // critical section begin
   spin_lock(&mylock);
-  struct mp2_task_struct *task_to_remove = (struct mp2_task_struct *)find_task_by_pid(pid);
+  struct mp_task_struct *task_to_remove = (struct mp_task_struct *)find_task_by_pid(pid);
   list_del(&(task_to_remove->task_node));
-	kmem_cache_free(mp_task_struct_cache, task_to_remove);
-  /*
-  list_for_each_entry_safe(entry, temp_entry, &head, list)
+  
+  if(running_mptask == task_to_remove)
   {
-    if(entry->pid == pid)
-    {
-      list_del(&(entry->task_nodei));
-      printk("DE-REGISTER FOR PID: %d\n", entry->pid);
-    }
+    running_mptask = NULL;
+    wake_up_process(dispatcher);
   }
-  */
+
+  kmem_cache_free(mp_task_struct_cache, task_to_remove);
   spin_unlock(&mylock);
   // critical section end
 }
@@ -209,9 +224,10 @@ setup up a timer for 5 seconds and put the bottom half on the workqueue
 */
 void _timer_callback( unsigned long data )
 {
-    setup_timer( &timer, _timer_callback, 0 );
-    queue_work(mp_q, &bottom_work);
-    mod_timer( &timer, jiffies + msecs_to_jiffies(5000) );
+   wake_up_process(dispatcher);
+   // setup_timer( &timer, _timer_callback, 0 );
+   // queue_work(mp_q, &bottom_work);
+   // mod_timer( &timer, jiffies + msecs_to_jiffies(5000) );
 }
 
 /**
@@ -219,6 +235,7 @@ Bottom half interrupt:
 go through the linked list of registered pid and update cpu time for each
 remove the registerd pid if the job is completed
 */
+/*
 static void bottom_fn(void *ptr)
 {
   struct mp_list *entry;
@@ -243,54 +260,87 @@ static void bottom_fn(void *ptr)
   spin_unlock(&mylock);
   // critical section end
 }
-
+*/
 ////////////////////////////
 ///////////////////////////
 int thread_fn() {
 
   printk(KERN_INFO "In dispatcher thread function");
 
+  // the ktread_should_stop will be changed flag at the module exit, where the kthread_stop() is called. 
   while(!kthread_should_stop()){
       set_current_state(TASK_INTERRUPTIBLE);
-      schedule()
-
-      struct mp_task_struct *entry;
-      struct task_struct * return_task=NULL;
-      long minp=LONG_MAX;
+      schedule();
 
       spin_lock(&mylock);
+      // set the previous running task state to ready and put to normal schedule
+      struct sched_param sparam;
+      if (running_mptask !=NULL){
+        sparam.sched_priority=0;
+        running_mptask->task_state = READY;
+        sched_setscheduler(running_mptask->task, SCHED_NORMAL, &sparam);
+        running_mptask = NULL;
+      } 
+      // loop over the task entries and find the ready task with smallest period
+      struct mp_task_struct *entry;
+      struct mp_task_struct * return_task=NULL;
+      long minp=LONG_MAX;
       list_for_each_entry(entry, &head, task_node)
       { 
         if(entry->task_state == READY && entry->period<minp ){
             return_task = entry->task;
             minp=entry->period;
         }
-        if(entry->task_state == RUNNING){
-            struct sched_param sparam;
-            sparam.sched_priority=0;
-            entry->task_state = READY;
-            running_task = entry;
-            sched_setscheduler(entry->task, SCHED_NORMAL, &sparam);
-        }
-    
-      entry->task_state = RUNNING;
+      }
+      // if there is a ready task, set it to running, install the timer
+      if (return_task!=NULL){
+      	return_task->task_state = RUNNING;
+      	running_mptask = return_task;
+      	setup_timer( &return_task->task_timer, _timer_callback, 0 ); 
+      	mod_timer( &return_task->task_timer, jiffies + msecs_to_jiffies(return_task->period) ); 
+      }     
       spin_unlock(&mylock);
-
-      if(return_task==NULL)
-            printk(KERN_INFO "error: no task in ready state");
-
-      struct sched_param sparam;
+     
+      // if no ready task, then goto next loop, which sleeps at the beginning 
+      if (return_task ==NULL){
+        printk(KERN_INFO "no task in ready state");
+        continue;
+      }
+      
+      // wake up the returned task, set the priority and put it to real time scheduling
       wake_up_process(return_task);
       sparam.sched_priority=99;
       sched_setscheduler(return_task, SCHED_FIFO, &sparam);
-
-
-      }
+  }
 
   return 0;
 }
 
+int yield_handle(int pid) 
+{
+  struct mp_task_struct *task_to_yield = (struct mp_task_struct *)find_task_by_pid(pid);
 
+  task_to_yield->next_period += task_to_yield->next_period==0 ? 
+    jiffies + msecs_to_jiffies(task_to_yield->period) :
+    msecs_to_jiffies(task_to_yield->period);
+
+  //if only the next period has not start yet
+  if(task_to_yield->next_period < jiffies)  return;
+
+  //setup timer
+  mod_timer(&(task_to_yield->task_timer), task_to_yield->next_period);
+  task_to_yield->task_state = SLEEPING;
+
+  //set current running to null
+  //
+  
+  //wakeup dispatcher and schedule
+  wake_up_process(dispatcher);
+  set_task_state(task_to_yield->task, TASK_UNINTERRUPTIBLE);
+  schedule();
+
+  return 0;
+}
 
 static const struct file_operations mp_file = {
   .owner = THIS_MODULE, 
@@ -314,12 +364,15 @@ int __init mp_init(void)
   spin_lock_init(&mylock);
   setup_timer( &timer, _timer_callback, 0 ); 
   mod_timer( &timer, jiffies + msecs_to_jiffies(5000) ); 
-  
+
+/*
   mp_q = create_workqueue("mp_queue");
   INIT_WORK(&bottom_work, &bottom_fn);
+*/
 
   mp_task_struct_cache = KMEM_CACHE(mp_task_struct, SLAB_PANIC);
 
+  // create dispatcher kernel thread
   char dispatcher_name[11]="dispatcher";
   printk(KERN_INFO "dispatching thread init");
   dispatcher = kthread_create(thread_fn,NULL,dispatcher_name);
@@ -341,6 +394,7 @@ void __exit mp_exit(void)
   printk(KERN_ALERT "MP1 MODULE UNLOADING\n");
   #endif
   struct list_head* n = head.next; 
+  /*
   struct mp_list* ptr;
   remove_proc_entry("status", proc_dir);
   remove_proc_entry("mp", NULL);
@@ -352,11 +406,12 @@ void __exit mp_exit(void)
   }
   del_timer( &timer );
   destroy_workqueue(mp_q);
-
+  */
   kmem_cache_destroy(mp_task_struct_cache);
 
   printk(KERN_ALERT "MP1 MODULE UNLOADED\n");
 
+  // destroy the kernel thread
   int ret;
   ret = kthread_stop(dispatcher);
   if(!ret)
