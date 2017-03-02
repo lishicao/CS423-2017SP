@@ -71,7 +71,7 @@ goes through the list of all registered threads, return info for each of them
 */
 static ssize_t mp_read (struct file *file, char __user *buffer, size_t count, loff_t *data)
 {
-  printk(KERN_ALERT "read function is called!!! %d", *data);
+  printk(KERN_ALERT "read function is called!!! %d\n", *data);
   if(*data>0)
     return 0;
 
@@ -260,18 +260,18 @@ perform the preemption, select and arrange the next thread to run
 int thread_fn() {
 
 
-  printk(KERN_INFO "I'm at dispatcher function line number %d",__LINE__);
+  printk(KERN_INFO "I'm at dispatcher function line number %d\n",__LINE__);
 
   // the ktread_should_stop will be changed flag at the module exit, where the kthread_stop() is called. 
   while(!kthread_should_stop()){
-  printk(KERN_INFO "I'm at dispatcher function line number %d",__LINE__);
+  printk(KERN_INFO "I'm at dispatcher function line number %d\n",__LINE__);
       set_current_state(TASK_INTERRUPTIBLE);
-  printk(KERN_INFO "I'm at dispatcher function line number %d",__LINE__);
+  printk(KERN_INFO "I'm at dispatcher function line number %d\n",__LINE__);
       schedule();
-  printk(KERN_INFO "I'm at dispatcher function line number %d",__LINE__);
+  printk(KERN_INFO "I'm at dispatcher function line number %d\n",__LINE__);
 /*
       spin_lock(&mylock);
-  printk(KERN_INFO "I'm at dispatcher function line number %d",__LINE__);
+  printk(KERN_INFO "I'm at dispatcher function line number %d\n",__LINE__);
       // set the previous running task state to ready and put to normal schedule
       struct sched_param sparam;
       if (running_mptask !=NULL){
@@ -279,14 +279,14 @@ int thread_fn() {
         running_mptask->task_state = READY;
         sched_setscheduler(running_mptask->task, SCHED_NORMAL, &sparam);
         running_mptask = NULL;
-  printk(KERN_INFO "I'm at dispatcher function line number %d",__LINE__);
+  printk(KERN_INFO "I'm at dispatcher function line number %d\n",__LINE__);
       } 
       // loop over the task entries and find the ready task with smallest period
       struct mp_task_struct *entry;
       struct mp_task_struct * return_task=NULL;
-  printk(KERN_INFO "I'm at dispatcher function line number %d",__LINE__);
+  printk(KERN_INFO "I'm at dispatcher function line number %d\n",__LINE__);
       long minp=LONG_MAX;
-  printk(KERN_INFO "I'm at dispatcher function line number %d",__LINE__);
+  printk(KERN_INFO "I'm at dispatcher function line number %d\n",__LINE__);
       list_for_each_entry(entry, &head, task_node)
       { 
         if(entry->task_state == READY && entry->period<minp ){
