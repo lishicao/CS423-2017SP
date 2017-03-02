@@ -19,10 +19,8 @@ int read_status(pid_t pid, char* period, char* process_time) {
 	char buffer[255];
 	char target[255];
 	sprintf(target, "%d[0]: %s ms, %s ms\n", pid, period, process_time);
-	printf("%d --- %s", pid,  target);	
 	while(fgets(buffer, 255, f)) {
-		printf("%s", buffer);	
-    		if (!strcmp(buffer, target))
+		if (!strcmp(buffer, target))
 			return 0;
 	}
 	fclose(f);
@@ -49,13 +47,13 @@ int main(int argc, char* argv[]) {
 		return 0;
 	printf("\nScheduler registration request.\n");\
 	pid_t pid = getpid();
-	reg(pid, argv[2], argv[2]);
+	reg(pid, argv[1], argv[2]);
 	if (read_status(pid, argv[1], argv[2])) {
 		printf("Registeration failed.\n");
 		exit(1);
 	}	
-	/*
 	printf("Registration succeeded.\n");
+/*
 	yield(pid);
 	int num_jobs = atoi(argv[3]);
 	while (num_jobs > 0) {
