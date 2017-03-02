@@ -16,15 +16,11 @@
 static variables and struct
 */
 static struct proc_dir_entry *proc_dir;
-static struct timer_list timer;
-static struct work_struct bottom_work;
 static struct kmem_cache *mp_task_struct_cache;
 static struct task_struct *dispatcher;
 static struct mp_task_struct *running_mptask;
 
-struct workqueue_struct *mp_q;
 static spinlock_t mylock;
-
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Group_10");
@@ -37,17 +33,7 @@ LIST_HEAD(head);
 #define RUNNING 2
 
 /**
-Linked list struct to store registered pid and corresponding cpt time
-*/
-/*
-struct mp_list {
-  struct list_head list;
-  unsigned long cpu_time;
-  long pid;
-};
-*/
-/**
- * Augmented Task Struct
+Augmented Task Struct
 */
 struct mp_task_struct
 {
@@ -55,21 +41,20 @@ struct mp_task_struct
   struct list_head task_node;
   struct timer_list task_timer;
 
-  unsigned int task_state;
-  uint64_t next_period;
-  unsigned int pid;
-  unsigned long period;
-  unsigned long processing_time;
-  unsigned long slice;
+  int task_state;
+  int next_period;
+  int pid;
+  int period;
+  int processing_time;
 };
 
 int flag = 1;
 #define DEBUG 1
 
 /**
-Called when user request cpu time about registed pid
-Go through the linked list, read cpt time of each registered pid, save in the buffer for caller
-Return: number of bytes read
+read function:
+called when userapp read from proc file system
+goes through the list of all registered threads, return info for each of them
 */
 static ssize_t mp_read (struct file *file, char __user *buffer, size_t count, loff_t *data)
 {
@@ -82,13 +67,12 @@ static ssize_t mp_read (struct file *file, char __user *buffer, size_t count, lo
   struct mp_task_struct* entry;
   int offset = 0;
 
-
   buf = (char *) kmalloc(2048,GFP_KERNEL); 
   // critical section begin
   spin_lock(&mylock);
   list_for_each_entry(entry, &head, task_node) {
     char temp[256];
-    sprintf(temp, "%lu[%lu]: %lu ms, %lu ms\n", entry->pid, entry->task_state, entry->period, entry->processing_time);
+    sprintf(temp, "%d[%d]: %d ms, %d ms\n", entry->pid, entry->task_state, entry->period, entry->processing_time);
     strcpy(buf + offset, temp);
     offset = strlen(buf);
   }
@@ -103,12 +87,13 @@ static ssize_t mp_read (struct file *file, char __user *buffer, size_t count, lo
 }
 
 /**
-Called when user register pid to the linked list
-Initiate a new block and add it to the linked list
+write function:
+called when userapp write to prof file system
+handle 3 cases based on the information passed in by userapp
 */
-
 static ssize_t mp_write (struct file *file, const char __user *buffer, size_t count, loff_t *data)
 {
+  printk("ENTERED WRITE\n");
   char* buf;
   buf = (char*) kmalloc(count+1, GFP_KERNEL);
   copy_from_user(buf, buffer, count);
@@ -119,48 +104,24 @@ static ssize_t mp_write (struct file *file, const char __user *buffer, size_t co
   }
   else if (buf[0] == 'Y') {
     printk("First letter is Y.\n");
+    yield_handle(buf);
   }
   else if (buf[0] == 'D') {
     printk("First letter is D.\n");
+    de_registration(buf);
   }
   else {
     printk("WTF\n");
   }
-/*
-  int copied;
-  struct mp_list* new_node;
-  char * buf;
-  buf = (char *) kmalloc(count+1,GFP_KERNEL); 
-  copied = 0;
-  copy_from_user(buf, buffer, count);
-  buf[count] = '\0';
-  new_node  = kmalloc(sizeof(struct mp_list), GFP_KERNEL);
-
-  if(kstrtol(buf, 10, &(new_node->pid)))
-  {
-    int i = 0;
-    while( buf[i] != '\0' )
-    {
-      printk("ERROR STR TO LONG: %x\n", *(buf+i));
-      i++;
-    }
-  }
-  printk("PID AT BEGINNING %d \n", new_node->pid);
-  printk("PID: %d\n", new_node->pid);
-  new_node->cpu_time = 1337;
-  INIT_LIST_HEAD(&new_node->list);
-  // critical section begin
-  spin_lock(&mylock);
-  list_add(&new_node->list, &head);
-  spin_unlock(&mylock);
-  // critical section end
-  printk("%d \n", ((struct mp_list*)head.next)->cpu_time);
-*/
   kfree(buf);
   return count;
 }
 
-
+/**
+[Important] only use integer arithmatic
+go through the list of registered threads, calculate the accumulative utilization for all threads
+return 1 (true) if the new task can be accepted, 0 (false) otherwise
+*/
 int admission_control(struct mp_task_struct* new_task) {
   unsigned long total_util = new_task->processing_time * 1000000 / new_task->period;
 
@@ -176,19 +137,19 @@ int admission_control(struct mp_task_struct* new_task) {
   else return 0;
 }
 
-
+/**
+register the new task into task list
+create a corresponding struct from the slab allocator
+if new task passes admission control, add it to the list
+*/
 void registration(char* buf) {
   struct mp_task_struct* new_task;
   new_task = (struct mp_task_struct*) kmem_cache_alloc(mp_task_struct_cache, GFP_KERNEL);
   INIT_LIST_HEAD(&new_task->task_node);
 
-  sscanf(buf+3, "%u, %u, %u\n", &new_task->pid, &new_task->period, &new_task->processing_time);
-/*
-  sscanf(strsep(&tmp, ","), "%u", &new_task->pid);
-  sscanf(strsep(&tmp, ","), "%u", &new_task->period);
-  sscanf(strsep(&tmp, "\n"), "%u", &new_task->processing_time);
-*/
+  sscanf(buf+3, "%d, %d, %d\n", &new_task->pid, &new_task->period, &new_task->processing_time);
   new_task->task_state = SLEEPING;
+  printk("registering %d: %d, %d\n", new_task->pid, new_task->period, new_task->processing_time);
 
   // admission control
   if (!admission_control(new_task)) return;
@@ -200,19 +161,29 @@ void registration(char* buf) {
   // critical section end
 }
 
-int de_registration(int pid)
+
+/**
+de-register a task
+if this task is running, preempt it
+go through the task list, find the task by pid and remove it from list
+*/
+int de_registration(char* buf)
 {
+  // read in pid from buffer
+  int pid;
+  sscanf(buf+3, "%d\n", &pid);
+
   // critical section begin
   spin_lock(&mylock);
   struct mp_task_struct *task_to_remove = (struct mp_task_struct *)find_task_by_pid(pid);
-  list_del(&(task_to_remove->task_node));
   
   if(running_mptask == task_to_remove)
   {
     running_mptask = NULL;
     wake_up_process(dispatcher);
   }
-
+	//clean up
+  list_del(&(task_to_remove->task_node));
   kmem_cache_free(mp_task_struct_cache, task_to_remove);
   spin_unlock(&mylock);
   // critical section end
@@ -220,49 +191,19 @@ int de_registration(int pid)
 
 /**
 Top half interrupt:
-setup up a timer for 5 seconds and put the bottom half on the workqueue
+wake up the dispatching thread
 */
 void _timer_callback( unsigned long data )
 {
-   wake_up_process(dispatcher);
-   // setup_timer( &timer, _timer_callback, 0 );
-   // queue_work(mp_q, &bottom_work);
-   // mod_timer( &timer, jiffies + msecs_to_jiffies(5000) );
+  wake_up_process(dispatcher);
 }
 
+
 /**
-Bottom half interrupt:
-go through the linked list of registered pid and update cpu time for each
-remove the registerd pid if the job is completed
+dispatching thread
+wake up in 2 cases: userapp signals YIELD; or timer interrupt
+perform the preemption, select and arrange the next thread to run
 */
-/*
-static void bottom_fn(void *ptr)
-{
-  struct mp_list *entry;
-  struct mp_list *temp_entry;
-  // critical section begin
-  spin_lock(&mylock);
-  list_for_each_entry_safe(entry,temp_entry, &head, list) 
-  {
-    unsigned long cpu_value;
-    if(!get_cpu_use(entry->pid, &cpu_value))
-    {
-      //success
-      entry->cpu_time = cpu_value;
-      printk("RECORDED CPU TIME FOR PID %d: %d\n", entry->pid, jiffies_to_msecs(entry->cpu_time));
-    }
-    else  // job finished, remove from linked list 
-    {
-      //list_del(&(entry->list));
-      printk("ERROR: CAN'T GET CPU USE FOR PID: %d, So this process is now being deleted\n", entry->pid);
-    }
-  }
-  spin_unlock(&mylock);
-  // critical section end
-}
-*/
-////////////////////////////
-///////////////////////////
 int thread_fn() {
 
   printk(KERN_INFO "In dispatcher thread function");
@@ -316,8 +257,17 @@ int thread_fn() {
   return 0;
 }
 
-int yield_handle(int pid) 
+
+/**
+yield handler
+find and change the task state to READY
+*/
+int yield_handle(char* buf) 
 {
+  // read in pid
+  int pid;
+  sscanf(buf+3, "%d\n", &pid);
+
   struct mp_task_struct *task_to_yield = (struct mp_task_struct *)find_task_by_pid(pid);
 
   task_to_yield->next_period += task_to_yield->next_period==0 ? 
@@ -332,8 +282,8 @@ int yield_handle(int pid)
   task_to_yield->task_state = SLEEPING;
 
   //set current running to null
-  //
-  
+  running_mptask = NULL;
+
   //wakeup dispatcher and schedule
   wake_up_process(dispatcher);
   set_task_state(task_to_yield->task, TASK_UNINTERRUPTIBLE);
@@ -351,33 +301,27 @@ static const struct file_operations mp_file = {
 /**
 mp_init - Called when module is loaded
 create proc directory and file
-set up timer
-create workqueue and work struct
 */
 int __init mp_init(void)
 {
   #ifdef DEBUG
-  printk(KERN_ALERT "MP1 MODULE LOADING\n");
+  printk(KERN_ALERT "MP MODULE LOADING\n");
   #endif
   proc_dir =  proc_mkdir("mp",NULL);
   proc_create("status",0666, proc_dir, &mp_file);  
   spin_lock_init(&mylock);
-  setup_timer( &timer, _timer_callback, 0 ); 
-  mod_timer( &timer, jiffies + msecs_to_jiffies(5000) ); 
+  //setup_timer( &timer, _timer_callback, 0 ); 
+  //mod_timer( &timer, jiffies + msecs_to_jiffies(5000) ); 
 
-/*
-  mp_q = create_workqueue("mp_queue");
-  INIT_WORK(&bottom_work, &bottom_fn);
-*/
-
+  // intialize slab allocator
+  printk("START ALLOCATE CACHE FOR SLAB\n");
   mp_task_struct_cache = KMEM_CACHE(mp_task_struct, SLAB_PANIC);
 
   // create dispatcher kernel thread
-  char dispatcher_name[11]="dispatcher";
   printk(KERN_INFO "dispatching thread init");
-  dispatcher = kthread_create(thread_fn,NULL,dispatcher_name);
+  dispatcher = kthread_create(thread_fn,NULL,"dispatcher");
 
-  printk(KERN_ALERT "MP1 MODULE LOADED\n");
+  printk(KERN_ALERT "MP MODULE LOADED\n");
 
   return 0;   
 }
@@ -386,7 +330,6 @@ int __init mp_init(void)
 mp_exit - Called when module is unloaded
 remove proc directory and file
 clean the linked list and free all memory used
-destroy workqueue and timer
 */
 void __exit mp_exit(void)
 {
@@ -394,20 +337,20 @@ void __exit mp_exit(void)
   printk(KERN_ALERT "MP1 MODULE UNLOADING\n");
   #endif
   struct list_head* n = head.next; 
-  /*
-  struct mp_list* ptr;
-  remove_proc_entry("status", proc_dir);
-  remove_proc_entry("mp", NULL);
 
-  while (n != &head) {
-    ptr = (struct mp_list*) n;
-    n = n->next;
-    kfree(ptr);
+  spin_lock(&mylock);
+	struct mp_task_struct *entry;
+	struct mp_task_struct *temp_entry;
+
+	list_for_each_entry_safe(entry, temp_entry, &head, task_node)
+  {
+		list_del(&(entry->task_node));
+		kmem_cache_free(mp_task_struct_cache, entry);	
   }
-  del_timer( &timer );
-  destroy_workqueue(mp_q);
-  */
-  kmem_cache_destroy(mp_task_struct_cache);
+	kmem_cache_destroy(mp_task_struct_cache);
+  
+	spin_unlock(&mylock);
+
 
   printk(KERN_ALERT "MP1 MODULE UNLOADED\n");
 
