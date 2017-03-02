@@ -193,6 +193,9 @@ printk(KERN_ALERT "created mp_task_struct address is %x\n", new_task);
   new_task->task_state = SLEEPING;
   new_task->next_period = 0;
   new_task->task = find_task_by_pid(new_task->pid);
+
+  printk("new_task->task: %x\n", new_task->task);
+
   setup_timer( &new_task->task_timer, _timer_callback, &new_task->pid); 
   printk("registering %d: %d, %d\n", new_task->pid, new_task->period, new_task->processing_time);
 
@@ -355,9 +358,14 @@ printk(KERN_ALERT "I'm at yield_handle line  %d\n", __LINE__);
 printk(KERN_ALERT "I'm at yield_handle line  %d\n", __LINE__);
 
   //wakeup dispatcher and schedule
-  set_task_state(task_to_yield->task, TASK_UNINTERRUPTIBLE);
+//  set_task_state(task_to_yield->task, TASK_UNINTERRUPTIBLE);
+
+printk("----%d[%d]: %d ms, %d ms\n", task_to_yield->pid, task_to_yield->task_state, task_to_yield->period, task_to_yield->processing_time);
+
+printk("----task_to_yield->task: %x\n", task_to_yield->task);
+
 printk(KERN_ALERT "I'm at yield_handle line  %d\n", __LINE__);
-  schedule();
+//  schedule();
 printk(KERN_ALERT "I'm at yield_handle line  %d\n", __LINE__);
   wake_up_process(dispatcher);
 printk(KERN_ALERT "I'm at yield_handle line  %d\n", __LINE__);
