@@ -120,15 +120,12 @@ static ssize_t mp_write (struct file *file, const char __user *buffer, size_t co
   copy_from_user(buf, buffer, count);
   buf[count] = '\0';
   if (buf[0] == 'R') {
-    printk("First letter is R.\n");
     registration(buf);
   }
   else if (buf[0] == 'Y') {
-    printk("First letter is Y.\n");
     yield_handle(buf);
   }
   else if (buf[0] == 'D') {
-    printk("First letter is D.\n");
     de_registration(buf);
   }
   else {
@@ -136,7 +133,6 @@ static ssize_t mp_write (struct file *file, const char __user *buffer, size_t co
     printk("%x\n", buf[0]);
   }
   kfree(buf);
-  printk(KERN_ALERT "I'm at mp_write line  %d\n", __LINE__);
   return count;
 }
 
@@ -170,7 +166,6 @@ void registration(char* buf) {
   new_task = (struct mp_task_struct*) kmem_cache_alloc(mp_task_struct_cache, GFP_KERNEL);
   INIT_LIST_HEAD(&new_task->task_node);
 
-  printk(KERN_ALERT "created mp_task_struct address is %x\n", new_task);
   //init variables
   sscanf(buf+3, "%d, %d, %d\n", &new_task->pid, &new_task->period, &new_task->processing_time);
   new_task->task_state = SLEEPING;
@@ -178,8 +173,13 @@ void registration(char* buf) {
   new_task->task = find_task_by_pid(new_task->pid);
   setup_timer( &new_task->task_timer, _timer_callback, new_task->pid); 
 
+  printk("REGISTER PID %d created mp_task_struct address is %x\n", new_task->pid, new_task);
   // admission control
-  if (!admission_control(new_task)) return;
+  if (!admission_control(new_task)) 
+  {
+    kmem_cache_free(mp_task_struct_cache, new_task);
+    return;
+  }
 
   // critical section begin
   spin_lock(&mylock);
@@ -200,21 +200,21 @@ void de_registration(char* buf)
   // read in pid from buffer
   int pid;
   sscanf(buf+3, "%d\n", &pid);
-
+  printk(KERN_ALERT "DE-REGISTER PID %d\n", pid);
   // critical section begin
   spin_lock(&mylock);
   struct mp_task_struct *task_to_remove = __get_task_by_pid(pid);
   task_to_remove->task_state = SLEEPING;
   del_timer( &task_to_remove->task_timer );
   list_del(&(task_to_remove->task_node));
-
+  kmem_cache_free(mp_task_struct_cache, task_to_remove);
+  
   if(running_mptask == task_to_remove)
   {
     running_mptask = NULL;
     wake_up_process(dispatcher);
   }
   //clean up
-  kmem_cache_free(mp_task_struct_cache, task_to_remove);
   spin_unlock(&mylock);
   // critical section end
 }
@@ -227,24 +227,18 @@ void _timer_callback( int pid )
 {
   printk("entered timer callback, pid is %d\n", pid);
   unsigned long flags;
+  
   spin_lock_irqsave(&mylock, flags);
+  // find mp task struct by pid
   struct mp_task_struct *task_to_wake = __get_task_by_pid(pid);
+  //set its status to ready and wake up dispatcher
   task_to_wake->task_state = READY;
-  if(task_to_wake!=NULL)
-  {
-    printk("TASK is NOT NULL\n");
-  }
-  else
-  {
-    printk("TASK is NULL\n");
-  }
   spin_unlock_irqrestore(&mylock, flags);
   wake_up_process(dispatcher);
 }
 
 /*
  * set the task priority helper
- *
  */
 void __set_priority(struct mp_task_struct *mytask, int policy, int priority)
 {
@@ -263,9 +257,12 @@ int thread_fn() {
 
   // the ktread_should_stop will be changed flag at the module exit, where the kthread_stop() is called. 
   while(1){
+    //go to sleep when initialized
     set_current_state(TASK_INTERRUPTIBLE);
     schedule();
+    //exit if needed
     if(kthread_should_stop()) return 0;
+    
     spin_lock(&mylock);
 
     // loop over the task entries and find the ready task with smallest period
@@ -280,24 +277,29 @@ int thread_fn() {
           min_period = entry->period;
       }
     }
-
+    
+    // if we didn't find a task we need to schedule
     if( task_to_run == NULL  ) 
     {
-      //no task is ready
+      //no task is ready just preempt current running task
       if(running_mptask != NULL)
       {
         printk("no task is ready\n");
         __set_priority(running_mptask, SCHED_NORMAL, 0);
+        //running_mptask = NULL; //---------------------------------
       }
     }
     else 
     {
+      //found a higher priority job is READY; preempt current one
       if(running_mptask != NULL && task_to_run->period < running_mptask->period)
       {
+        printk(KERN_ALERT "PREEMPTING PID: %d\n", running_mptask->pid);
         running_mptask->task_state = READY;
         __set_priority(running_mptask, SCHED_NORMAL, 0);
       }
 
+      //set task_to_run to run
       task_to_run->task_state = RUNNING;
       wake_up_process(task_to_run->task);
       __set_priority(task_to_run, SCHED_FIFO, 99);
@@ -319,7 +321,7 @@ void yield_handle(char* buf)
   // read in pid
   int pid;
   sscanf(buf+3, "%d\n", &pid);
-
+printk("YIELD PID %d\n", pid);
   struct mp_task_struct *task_to_yield = __get_task_by_pid(pid);
 
   task_to_yield->next_period += task_to_yield->next_period==0 ? 
@@ -337,7 +339,12 @@ void yield_handle(char* buf)
   task_to_yield->task_state = SLEEPING;
 
   //set current running to null
-  running_mptask = NULL;
+  /*
+  if(running_mptask == task_to_yield)
+  {
+    running_mptask = NULL;
+  }
+  */
 
   //wakeup dispatcher and schedule
   wake_up_process(dispatcher);
@@ -396,15 +403,17 @@ void __exit mp_exit(void)
      printk(KERN_INFO "Dispatcher thread stopped\n");
 
   spin_lock(&mylock);
-	list_for_each_entry_safe(entry, temp_entry, &head, task_node)
+  //go through the list and detroy the list entry and timer inside of mp task struct
+  list_for_each_entry_safe(entry, temp_entry, &head, task_node)
   {
-		list_del(&(entry->task_node));
-		del_timer( &entry->task_timer );
+    list_del(&(entry->task_node));
+    del_timer( &entry->task_timer );
     kmem_cache_free(mp_task_struct_cache, entry);	
   }
-	kmem_cache_destroy(mp_task_struct_cache);
+  //destroy allocated memory
+  kmem_cache_destroy(mp_task_struct_cache);
   
-	spin_unlock(&mylock);
+  spin_unlock(&mylock);
   printk(KERN_ALERT "MP1 MODULE UNLOADED\n");
 
   //remove proc entry
