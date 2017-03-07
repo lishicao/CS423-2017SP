@@ -209,6 +209,12 @@ void de_registration(char* buf)
   //printk("DELETE NODE: %x\n", task_to_remove->task_node); 
   del_timer( &task_to_remove->task_timer );
   list_del(&(task_to_remove->task_node));
+/*
+struct mp_task_struct* entry;
+  list_for_each_entry(entry, &head, task_node) {
+printk("%d[%d]: %d ms, %d ms\n", entry->pid, entry->task_state, entry->period, entry->processing_time);
+  }
+*/
 
   if(running_mptask == task_to_remove)
   {
@@ -271,27 +277,39 @@ int thread_fn() {
   struct mp_task_struct *task_to_run;
 
   // the ktread_should_stop will be changed flag at the module exit, where the kthread_stop() is called. 
-  while(!kthread_should_stop()){
+  while(1){
   
     set_current_state(TASK_INTERRUPTIBLE);
     schedule();
     printk(KERN_INFO "I'm at dispatcher function line number %d\n",__LINE__);
-      
+    if(kthread_should_stop()) return 0;
     spin_lock(&mylock);
 
 printk("thread_fn get the lock\n");
     // loop over the task entries and find the ready task with smallest period
     struct mp_task_struct *entry;
+    task_to_run = NULL;
     int min_period=INT_MAX;
+printk("min_period: %d\n", min_period);
     printk(KERN_INFO "I'm at dispatcher function line number %d\n",__LINE__);
-      
+
+
     list_for_each_entry(entry, &head, task_node)
     {
-      if(entry->task_state == READY && entry->period<min_period ){
+
+//printk("entry addr: \n");
+      if(entry->task_state == READY && entry->period < min_period ){
           task_to_run = entry;
           min_period = entry->period;
       }
+
+/*
+      if (entry->task_state != READY) continue;
+      if (task_to_run == NULL) task_to_run = entry;
+      else if (task_to_run->period > entry->period) task_to_run = entry;
+*/
     }
+
     printk(KERN_INFO "I'm at dispatcher function line number %d\n",__LINE__);
 
     if( task_to_run == NULL  ) 
@@ -307,6 +325,7 @@ printk("thread_fn get the lock\n");
     else 
     {
 printk("task_to_run addr: %x\n", task_to_run);
+printk("task_to_run->task addr: %x, equals null: %d\n", task_to_run->task, task_to_run->task==NULL);
     printk("TASK TO RUN %d\n", task_to_run->task->pid);
       if(running_mptask != NULL && task_to_run->period < running_mptask->period)
       {
