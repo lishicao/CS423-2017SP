@@ -35,7 +35,7 @@ void yield(pid_t pid) {
 
 void unreg(pid_t pid) {
 	FILE *f = fopen ("/proc/mp/status", "w");
-	fprintf(f, "U, %d", pid);
+	fprintf(f, "D, %d", pid);
 	fclose(f);
 }
 
@@ -53,11 +53,12 @@ int main(int argc, char* argv[]) {
 		exit(1);
 	}	
 	printf("Registration succeeded.\n");
-/*
+
 	yield(pid);
+	
 	int num_jobs = atoi(argv[3]);
 	while (num_jobs > 0) {
-		struct timeval tv;
+/*		struct timeval tv;
 		gettimeofday(&tv, NULL);
 		suseconds_t t = tv.tv_usec;
 		num_jobs--;
@@ -67,9 +68,15 @@ int main(int argc, char* argv[]) {
 		struct timespec ts;
 		ts.tv_nsec = (atoi(argv[1])*1000000-(tv.tv_usec-t))*1000;
 		nanosleep(&ts, NULL);
-	}
-	unreg(pid);
 */
+		num_jobs--;
+		printf("userapp iteration %d\n", num_jobs);
+		sleep(1);
+		yield(pid);
+	}
+	sleep(1);
+	unreg(pid);
+
 	return 0;
 }
 
