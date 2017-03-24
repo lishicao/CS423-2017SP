@@ -5,7 +5,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include "mp3_given.h"
-#include "errno.h"
+//#include <errno.h>
 #include <linux/list.h>
 #include <asm/uaccess.h>
 #include <linux/timer.h>
@@ -14,8 +14,8 @@
 #include <linux/kthread.h>
 #include <linux/sched.h>
 #include <linux/delay.h>
-
-
+#include <linux/cdev.h>
+#include <linux/mm.h>
 
 #define DEBUG 1
 #define PAGE_NUM 128
@@ -23,6 +23,7 @@
 /**
 static variables and struct
 */
+struct cdev chrdev;
 static struct proc_dir_entry *proc_dir;
 static spinlock_t mylock;
 static struct workqueue_struct *wq;
@@ -167,7 +168,7 @@ static int dev_mmap(struct file *filp, struct vm_area_struct *vma){
                 /* fourth argument is the protection of the map. you might
                  * want to use vma->vm_page_prot instead.
                  */
-                if (remap_page_range(vma, start, pfn, PAGE_SIZE, PAGE_SHARED))
+                if (remap_pfn_range(vma, start, pfn, PAGE_SIZE, PAGE_SHARED))
                         return -EAGAIN;
                 start+=PAGE_SIZE;
                 pos+=PAGE_SIZE;
@@ -312,6 +313,10 @@ int __init mp_init(void)
   wq = create_workqueue("mp_queue");
   delay = msecs_to_jiffies(50);
 
+  cdev_init(&chrdev, &dev_file);
+  int majorNumber = register_chrdev(0, "MP3", &dev_file);
+  printk(KERN_ALERT "MAJOR NUMBER: %d\n", majorNumber);
+
   //create work_queue
   wq = create_workqueue("mp_queue");
 
@@ -330,6 +335,8 @@ void __exit mp_exit(void)
   #ifdef DEBUG
   printk(KERN_ALERT "MP3 MODULE UNLOADING\n");
   #endif
+
+  unregister_chrdev(0, "MP3");
 
   struct mp_task_struct *entry;
   struct mp_task_struct *temp_entry;
