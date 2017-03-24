@@ -286,7 +286,7 @@ int thread_fn() {
       {
         printk("no task is ready\n");
         __set_priority(running_mptask, SCHED_NORMAL, 0);
-        //running_mptask = NULL; //---------------------------------
+        running_mptask = NULL; //---------------------------------
       }
     }
     else 

@@ -77,7 +77,7 @@ int main(int argc, char* argv[]) {
 	}	
 	printf("Registration succeeded.\n");
 	yield(pid);
-	
+	printf("Start time of the process %d second\n", start.tv_sec);	
 	int num_jobs = atoi(argv[2]);
 	while (num_jobs-- > 0) {
 	/*
@@ -101,10 +101,16 @@ int main(int argc, char* argv[]) {
 		gettimeofday(&start, NULL);
 		factorial(factval);
 		gettimeofday(&end, NULL);
-		yield(pid);	
+		yield(pid);
+		
 		int actual_processingtime = (int)(end.tv_usec-start.tv_usec);
 		printf("The actual time it takes for factorial is : %dms.\n",actual_processingtime);
+		gettimeofday(&end, NULL);
+		printf("Wakeup time of the process %d second\n", end.tv_sec);	
 	}
+
+	gettimeofday(&end, NULL);
+	printf("End time of the process %d second\n", end.tv_sec);	
 	// sleep(1);
 	unreg(pid);
 	return 0;
