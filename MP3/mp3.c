@@ -5,6 +5,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include "mp3_given.h"
+#include "errno.h"
 #include <linux/list.h>
 #include <asm/uaccess.h>
 #include <linux/timer.h>
@@ -17,19 +18,27 @@
 
 
 #define DEBUG 1
+#define PAGE_NUM 128
+
 /**
 static variables and struct
 */
 static struct proc_dir_entry *proc_dir;
 static spinlock_t mylock;
 static struct workqueue_struct *wq;
+unsigned long * mem_buf;
+unsigned long delay;
+int mem_buf_ptr = 0;
+
+static void mp_work_func(struct work_struct *work);
+static int dev_mmap(struct file *filp, struct vm_area_struct *vma);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Group_10");
 MODULE_DESCRIPTION("CS-423 MP3");
 
 LIST_HEAD(head);
-
+DECLARE_DELAYED_WORK(mp_delayed_work, mp_work_func);
 /**
 Augmented Task Struct
 */
@@ -127,6 +136,56 @@ static ssize_t mp_write (struct file *file, const char __user *buffer, size_t co
   return count;
 }
 
+
+
+static ssize_t dev_open (struct inode *inode, struct file *filp)
+{}
+static ssize_t dev_close (struct inode *inode, struct file *filp)
+{}
+
+static int dev_mmap(struct file *filp, struct vm_area_struct *vma){
+
+        printk(KERN_INFO "dev_mmap called\n");
+
+        unsigned long pfn;
+	char *pos;
+        unsigned long start = (unsigned long)vma->vm_start;
+        unsigned long size = (unsigned long)(vma->vm_end - vma->vm_start);
+
+        /* if userspace tries to mmap beyond end of our buffer, fail */
+        if (size > PAGE_NUM * PAGE_SIZE)
+                return -EINVAL;
+
+        /* start off at the start of the buffer */
+        pos = mem_buf;
+
+        /* loop through all the physical pages in the buffer */
+        /* Remember this won't work for vmalloc()d memory ! */
+        while (size > 0) {
+                /* remap a single physical page to the process's vma */
+                pfn = vmalloc_to_pfn((void *)pos);
+                /* fourth argument is the protection of the map. you might
+                 * want to use vma->vm_page_prot instead.
+                 */
+                if (remap_page_range(vma, start, pfn, PAGE_SIZE, PAGE_SHARED))
+                        return -EAGAIN;
+                start+=PAGE_SIZE;
+                pos+=PAGE_SIZE;
+                size-=PAGE_SIZE;
+        }
+	printk(KERN_INFO "dev_mmap finished\n");
+        return 0;
+}
+
+
+static const struct file_operations dev_file = {
+        .open = dev_open,
+        .release = dev_close,
+        .mmap = dev_mmap,
+        .owner = THIS_MODULE,
+};
+
+
 /**
 register the new task into task list
 create a corresponding struct from the slab allocator
@@ -136,8 +195,8 @@ void registration(char* buf) {
   printk("enter registration()\n");
   // TODO: potential bug here
   if (list_empty(&head)) { // current PCB list is empty
-    wq = create_workqueue("mp_queue");
-    printk("--> a NEW work queue is created\n");
+    queue_delayed_work(wq, &mp_delayed_work, delay);
+    printk("--> a NEW workqueue JOB is created\n");
   }
 
   // alloc memory for the new struct
@@ -183,10 +242,44 @@ void unregistration(char* buf)
 
   // TODO potential bug here
   if (list_empty(&head)) {  // PCB list is empty after deletion
-    destroy_workqueue(wq);
-    printk("--> work queue is EMPTY and destroyed\n");
+    cancel_delayed_work(&mp_delayed_work);
+    flush_workqueue(wq);
+    printk("--> work queue is EMPTY and flushed\n");
+  }
+  kfree(task_to_remove);
+}
+
+/**
+
+*/
+static void mp_work_func(struct work_struct *work) {
+  unsigned long min_flt, maj_flt, utime, stime;
+  unsigned long min_flt_sum, maj_flt_sum, cpu_time_sum;
+
+  // critical section begin  
+  spin_lock(&mylock);
+  struct mp_task_struct *entry;
+  list_for_each_entry(entry, &head, task_node) {
+    if (get_cpu_use(entry->pid, &min_flt, &maj_flt, &utime, &stime) == -1) {
+      continue;
+    }
+    min_flt_sum += min_flt;
+    maj_flt_sum += maj_flt;
+    cpu_time_sum += (utime + stime);
+  }
+  spin_unlock(&mylock);
+  // critical section end
+
+  mem_buf[mem_buf_ptr ++] = jiffies;
+  mem_buf[mem_buf_ptr ++] = min_flt_sum;
+  mem_buf[mem_buf_ptr ++] = maj_flt_sum;
+  mem_buf[mem_buf_ptr ++] = jiffies_to_msecs(cputime_to_jiffies(cpu_time_sum));
+
+  if (mem_buf_ptr > PAGE_NUM * PAGE_SIZE / sizeof(unsigned long)) {
+    printk(KERN_ALERT "memory buffer is full!\n");
   }
 
+  queue_delayed_work(wq, &mp_delayed_work, delay);
 }
 
 
@@ -208,7 +301,20 @@ int __init mp_init(void)
   proc_dir =  proc_mkdir("mp",NULL);
   proc_create("status",0666, proc_dir, &mp_file);
   spin_lock_init(&mylock);
-  
+
+  // TODO potential bug here
+  mem_buf = (unsigned long*) vmalloc(PAGE_NUM * PAGE_SIZE);
+
+  if (mem_buf == NULL) {
+    printk("WTF: mem_buff is NULL\n");
+  }
+
+  wq = create_workqueue("mp_queue");
+  delay = msecs_to_jiffies(50);
+
+  //create work_queue
+  wq = create_workqueue("mp_queue");
+
   printk(KERN_ALERT "MP3 MODULE LOADED\n");
   return 0;
 }
@@ -237,6 +343,11 @@ void __exit mp_exit(void)
   spin_unlock(&mylock);
   printk(KERN_ALERT "MP3 MODULE UNLOADED\n");
 
+  vfree(mem_buf);
+  // handle work queue
+  cancel_delayed_work(&mp_delayed_work);
+  flush_workqueue(wq);
+  destroy_workqueue(wq);
   //remove proc entry
   remove_proc_entry("status", proc_dir);
   remove_proc_entry("mp", NULL);
