@@ -16,6 +16,8 @@
 #include <linux/delay.h>
 #include <linux/cdev.h>
 #include <linux/mm.h>
+#include <linux/vmalloc.h>
+#include <linux/string.h>
 
 #define DEBUG 1
 #define PAGE_NUM 128
@@ -31,6 +33,7 @@ unsigned long * mem_buf;
 unsigned long delay;
 int mem_buf_ptr = 0;
 int majorNumber = 0;
+//unsigned long min_flt_sum = 0, maj_flt_sum = 0, cpu_time_sum = 0;
 
 static void mp_work_func(struct work_struct *work);
 static int dev_mmap(struct file *filp, struct vm_area_struct *vma);
@@ -142,21 +145,28 @@ static int dev_mmap(struct file *filp, struct vm_area_struct *vma){
 
                 /* remap a single physical page to the process's vma */
                 //TODO!!!!
-                //pfn = vmalloc_to_pfn((void *)pos);
-                struct page *page;
-                page = vmalloc_to_page( pos );
+                printk("vmalloc_to_page %x\n", vmalloc_to_page( (void*) pos ));
+                pfn = vmalloc_to_pfn((void *)pos);
+                printk("vmalloc_to_pfn %x, pos %x\n", pfn, pos);
+
+                //struct page *page;
+                //page = vmalloc_to_page( pos );
 
                 /* fourth argument is the protection of the map. you might
                  * want to use vma->vm_page_prot instead.
                  */
                 //TODO
-                int ret = 0;
-                if( ( ret = vm_insert_page(vma, start, page) ) < 0 ) 
+                //int ret = 0;
+                //if( ( ret = vm_insert_page(vma, start, page) ) < 0 ) 
+                //{
+                //  return ret;
+                //}
+                if (remap_pfn_range(vma, start, pfn, PAGE_SIZE, vma->vm_page_prot) )
                 {
-                  return ret;
+                  printk(KERN_ALERT "ERROR REMAP PFN\n");
+                  return -EAGAIN;
                 }
-                //if (remap_pfn_range(vma, start, pfn, PAGE_SIZE, PAGE_SHARED))
-                //        return -EAGAIN;
+                printk("DONE REMAP \n");
                 start+=PAGE_SIZE;
                 pos+=PAGE_SIZE;
                 size-=PAGE_SIZE;
@@ -193,7 +203,7 @@ void registration(char* buf) {
   INIT_LIST_HEAD(&new_task->task_node);
   
   //init variables
-  sscanf(buf+3, "%d\n", &new_task->pid);
+  sscanf(buf+2, "%d\n", &new_task->pid);
   new_task->utilization = 0;
   new_task->major_fault = 0;
   new_task->minor_fault = 0;
@@ -226,7 +236,7 @@ void unregistration(char* buf)
   
   // read in pid from buffer
   int pid;
-  sscanf(buf+3, "%d\n", &pid);
+  sscanf(buf+2, "%d\n", &pid);
   printk(KERN_ALERT "DE-REGISTER PID %d\n", pid);
   // critical section begin
   spin_lock(&mylock);
@@ -242,6 +252,12 @@ void unregistration(char* buf)
     printk("--> work queue is EMPTY and flushed\n");
   }
   kfree(task_to_remove);
+
+
+  // TODO
+  printk("content in mem_buf: %lu\n", mem_buf);
+
+
 }
 
 /**
@@ -249,8 +265,10 @@ void unregistration(char* buf)
 */
 static void mp_work_func(struct work_struct *work) {
   unsigned long min_flt, maj_flt, utime, stime;
-  unsigned long min_flt_sum, maj_flt_sum, cpu_time_sum;
-  return 0;
+  unsigned long min_flt_sum = 0, maj_flt_sum = 0, cpu_time_sum = 0;
+  
+  printk(KERN_ALERT "mp_work_func is called\n");
+
   // critical section begin  
   spin_lock(&mylock);
   struct mp_task_struct *entry;
@@ -258,6 +276,9 @@ static void mp_work_func(struct work_struct *work) {
     if (get_cpu_use(entry->pid, &min_flt, &maj_flt, &utime, &stime) == -1) {
       continue;
     }
+
+    printk("%d: %lu, %lu, %lu\n", entry->pid, min_flt, maj_flt, utime+stime);
+
     min_flt_sum += min_flt;
     maj_flt_sum += maj_flt;
     cpu_time_sum += (utime + stime);
@@ -265,10 +286,21 @@ static void mp_work_func(struct work_struct *work) {
   spin_unlock(&mylock);
   // critical section end
 
+  printk("ready to write to mem_buf\n");
+
+  printk("print to mem_buf: [%lu, %lu, %lu, %lu]\n",jiffies, min_flt_sum, maj_flt_sum, (unsigned long) jiffies_to_msecs(cputime_to_jiffies(cpu_time_sum)));
+
+  // critical section begin
+  spin_lock(&mylock);
   mem_buf[mem_buf_ptr ++] = jiffies;
   mem_buf[mem_buf_ptr ++] = min_flt_sum;
   mem_buf[mem_buf_ptr ++] = maj_flt_sum;
-  mem_buf[mem_buf_ptr ++] = jiffies_to_msecs(cputime_to_jiffies(cpu_time_sum));
+  mem_buf[mem_buf_ptr ++] = (unsigned long) jiffies_to_msecs(cputime_to_jiffies(cpu_time_sum));
+  spin_unlock(&mylock);
+  // critical section end
+
+
+  printk("after writing, mem_buf_ptr is %d\n", mem_buf_ptr);
 
   if (mem_buf_ptr > PAGE_NUM * PAGE_SIZE / sizeof(unsigned long)) {
     printk(KERN_ALERT "memory buffer is full!\n");
@@ -299,6 +331,31 @@ int __init mp_init(void)
 
   // TODO potential bug here
   mem_buf = (unsigned long*) vmalloc(PAGE_NUM * PAGE_SIZE);
+  memset(mem_buf, 0, PAGE_NUM * PAGE_SIZE);
+
+  //mem_buf = (unsigned long*) kmalloc(PAGE_NUM * PAGE_SIZE, GFP_KERNEL);
+
+  //mem_buf = (unsigned long*) vmalloc(4096);
+  if( !mem_buf ) 
+  {
+    printk("VMALLOC ERROR\n");
+  }
+  printk("mem_buf is %x\n", mem_buf);
+
+
+  /*
+  void* vptr = vmalloc(PAGE_NUM * PAGE_SIZE);
+  if(vptr==NULL)
+  {
+    printk("VMALLOC ERROR\n");
+    return 0;
+  }
+  int* ptr = (int*) vptr;
+  *ptr = 1;
+  printk("vptr is %x  %x\n", vptr, (unsigned long*) vptr);
+  printk("ptr value is %d\n", *ptr);
+  vfree(vptr);
+  */
 
   if (mem_buf == NULL) {
     printk("WTF: mem_buff is NULL\n");
@@ -349,7 +406,7 @@ void __exit mp_exit(void)
   spin_unlock(&mylock);
   printk(KERN_ALERT "MP3 MODULE UNLOADED\n");
 
-  vfree(mem_buf);
+  vfree((void*)mem_buf);
   //remove proc entry
   remove_proc_entry("status", proc_dir);
   remove_proc_entry("mp", NULL);
