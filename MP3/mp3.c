@@ -120,7 +120,6 @@ static ssize_t dev_close (struct inode *inode, struct file *filp)
 {}
 
 static int dev_mmap(struct file *filp, struct vm_area_struct *vma){
-  return 0;
         printk(KERN_INFO "dev_mmap called\n");
 
         unsigned long pfn;
@@ -134,17 +133,30 @@ static int dev_mmap(struct file *filp, struct vm_area_struct *vma){
 
         /* start off at the start of the buffer */
         pos = mem_buf;
+        printk(KERN_INFO "Before While %d\n", __LINE__);
 
         /* loop through all the physical pages in the buffer */
         /* Remember this won't work for vmalloc()d memory ! */
         while (size > 0) {
+                printk(KERN_INFO "Inside While %d\n", size);
+
                 /* remap a single physical page to the process's vma */
-                pfn = vmalloc_to_pfn((void *)pos);
+                //TODO!!!!
+                //pfn = vmalloc_to_pfn((void *)pos);
+                struct page *page;
+                page = vmalloc_to_page( pos );
+
                 /* fourth argument is the protection of the map. you might
                  * want to use vma->vm_page_prot instead.
                  */
-                if (remap_pfn_range(vma, start, pfn, PAGE_SIZE, PAGE_SHARED))
-                        return -EAGAIN;
+                //TODO
+                int ret = 0;
+                if( ( ret = vm_insert_page(vma, start, page) ) < 0 ) 
+                {
+                  return ret;
+                }
+                //if (remap_pfn_range(vma, start, pfn, PAGE_SIZE, PAGE_SHARED))
+                //        return -EAGAIN;
                 start+=PAGE_SIZE;
                 pos+=PAGE_SIZE;
                 size-=PAGE_SIZE;
@@ -155,8 +167,8 @@ static int dev_mmap(struct file *filp, struct vm_area_struct *vma){
 
 
 static const struct file_operations dev_file = {
-        .open = dev_open,
-        .release = dev_close,
+        .open = NULL,
+        .release = NULL,
         .mmap = dev_mmap,
         .owner = THIS_MODULE,
 };
@@ -192,14 +204,15 @@ void registration(char* buf) {
   // critical section begin
   spin_lock(&mylock);
   list_add(&new_task->task_node, &head);
-  spin_unlock(&mylock);
-  // critical section end
-  printk(KERN_ALERT "registratin succesfully finished\n");
-
+  
   if (empty_flag) { // current PCB list is empty
     queue_delayed_work(wq, &mp_delayed_work, delay);
     printk("--> a NEW workqueue JOB is created\n");
   }
+  spin_unlock(&mylock);
+  // critical section end
+  printk(KERN_ALERT "registratin succesfully finished\n");
+
 } 
 
 /**
@@ -210,6 +223,7 @@ go through the task list, find the task by pid and remove it from list
 void unregistration(char* buf)
 {
   printk("enter unregistration()\n");
+  
   // read in pid from buffer
   int pid;
   sscanf(buf+3, "%d\n", &pid);
@@ -321,6 +335,11 @@ void __exit mp_exit(void)
   struct mp_task_struct *entry;
   struct mp_task_struct *temp_entry;
 
+  // handle work queue
+  cancel_delayed_work(&mp_delayed_work);
+  flush_workqueue(wq);
+  destroy_workqueue(wq);
+
   spin_lock(&mylock);
   //go through the list and detroy the list entry and timer inside of mp task struct
   list_for_each_entry_safe(entry, temp_entry, &head, task_node)
@@ -331,10 +350,6 @@ void __exit mp_exit(void)
   printk(KERN_ALERT "MP3 MODULE UNLOADED\n");
 
   vfree(mem_buf);
-  // handle work queue
-  cancel_delayed_work(&mp_delayed_work);
-  flush_workqueue(wq);
-  destroy_workqueue(wq);
   //remove proc entry
   remove_proc_entry("status", proc_dir);
   remove_proc_entry("mp", NULL);
