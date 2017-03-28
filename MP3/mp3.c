@@ -30,6 +30,7 @@ static struct workqueue_struct *wq;
 unsigned long * mem_buf;
 unsigned long delay;
 int mem_buf_ptr = 0;
+int majorNumber = 0;
 
 static void mp_work_func(struct work_struct *work);
 static int dev_mmap(struct file *filp, struct vm_area_struct *vma);
@@ -80,33 +81,7 @@ goes through the list of all registered threads, return info for each of them
 static ssize_t mp_read (struct file *file, char __user *buffer, size_t count, loff_t *data)
 {
   printk(KERN_ALERT "read function is called!!! %d\n", *data);
-  if(*data>0)
-    return 0;
-
-  int copied = 0;
-  char * buf;
-  struct mp_task_struct* entry;
-  int offset = 0;
-
-  buf = (char *) kmalloc(2048,GFP_KERNEL);
-  // critical section begin
-  spin_lock(&mylock);
-  list_for_each_entry(entry, &head, task_node) {
-    char temp[256];
-//    sprintf(temp, "%d[%d]: %d ms, %d ms\n", entry->pid, entry->task_state, entry->period, entry->processing_time);
-    strcpy(buf + offset, temp);
-    offset = strlen(buf);
-  }
-  spin_unlock(&mylock);
-  // critical section end
-
-  buf[strlen(buf)] = '\0';
-  copied = strlen(buf)+1;
-  copy_to_user(buffer, buf, copied);
-
-  kfree(buf);
-  *data += copied;
-  return copied;
+  return 0;
 }
 
 /**
@@ -145,12 +120,12 @@ static ssize_t dev_close (struct inode *inode, struct file *filp)
 {}
 
 static int dev_mmap(struct file *filp, struct vm_area_struct *vma){
-
+  return 0;
         printk(KERN_INFO "dev_mmap called\n");
 
         unsigned long pfn;
 	char *pos;
-        unsigned long start = (unsigned long)vma->vm_start;
+        unsigned long start = vma->vm_start;
         unsigned long size = (unsigned long)(vma->vm_end - vma->vm_start);
 
         /* if userspace tries to mmap beyond end of our buffer, fail */
@@ -194,11 +169,11 @@ if new task passes admission control, add it to the list
 */
 void registration(char* buf) {
   printk("enter registration()\n");
+  //return 0;
+  
   // TODO: potential bug here
-  if (list_empty(&head)) { // current PCB list is empty
-    queue_delayed_work(wq, &mp_delayed_work, delay);
-    printk("--> a NEW workqueue JOB is created\n");
-  }
+  int empty_flag = list_empty(&head);
+  printk("EMPTY FLAG: %d\n", empty_flag);
 
   // alloc memory for the new struct
   struct mp_task_struct* new_task;
@@ -220,6 +195,11 @@ void registration(char* buf) {
   spin_unlock(&mylock);
   // critical section end
   printk(KERN_ALERT "registratin succesfully finished\n");
+
+  if (empty_flag) { // current PCB list is empty
+    queue_delayed_work(wq, &mp_delayed_work, delay);
+    printk("--> a NEW workqueue JOB is created\n");
+  }
 } 
 
 /**
@@ -256,7 +236,7 @@ void unregistration(char* buf)
 static void mp_work_func(struct work_struct *work) {
   unsigned long min_flt, maj_flt, utime, stime;
   unsigned long min_flt_sum, maj_flt_sum, cpu_time_sum;
-
+  return 0;
   // critical section begin  
   spin_lock(&mylock);
   struct mp_task_struct *entry;
@@ -314,7 +294,7 @@ int __init mp_init(void)
   delay = msecs_to_jiffies(50);
 
   cdev_init(&chrdev, &dev_file);
-  int majorNumber = register_chrdev(0, "MP3", &dev_file);
+  majorNumber = register_chrdev(0, "MP3", &dev_file);
   printk(KERN_ALERT "MAJOR NUMBER: %d\n", majorNumber);
 
   //create work_queue
@@ -336,7 +316,7 @@ void __exit mp_exit(void)
   printk(KERN_ALERT "MP3 MODULE UNLOADING\n");
   #endif
 
-  unregister_chrdev(0, "MP3");
+  unregister_chrdev(majorNumber, "MP3");
 
   struct mp_task_struct *entry;
   struct mp_task_struct *temp_entry;
