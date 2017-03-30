@@ -208,13 +208,14 @@ void de_registration(char* buf)
   del_timer( &task_to_remove->task_timer );
   list_del(&(task_to_remove->task_node));
   kmem_cache_free(mp_task_struct_cache, task_to_remove);
-  
+
+  // if the task is currently running, preempt it  
   if(running_mptask == task_to_remove)
   {
     running_mptask = NULL;
     wake_up_process(dispatcher);
   }
-  //clean up
+  
   spin_unlock(&mylock);
   // critical section end
 }
@@ -263,6 +264,7 @@ int thread_fn() {
     //exit if needed
     if(kthread_should_stop()) return 0;
     
+    // critical section begins
     spin_lock(&mylock);
 
     // loop over the task entries and find the ready task with smallest period
@@ -286,7 +288,6 @@ int thread_fn() {
       {
         printk("no task is ready\n");
         __set_priority(running_mptask, SCHED_NORMAL, 0);
-        running_mptask = NULL; //---------------------------------
       }
     }
     else 
@@ -306,6 +307,7 @@ int thread_fn() {
       running_mptask = task_to_run;
     }
     spin_unlock(&mylock);
+    // critical section ends
   }
 
   return 0;
@@ -321,9 +323,11 @@ void yield_handle(char* buf)
   // read in pid
   int pid;
   sscanf(buf+3, "%d\n", &pid);
-printk("YIELD PID %d\n", pid);
+  printk("YIELD PID %d\n", pid);
+  // find the yielding task by pid
   struct mp_task_struct *task_to_yield = __get_task_by_pid(pid);
 
+  // judeg if it is the first time calling yield from the task
   task_to_yield->next_period += task_to_yield->next_period==0 ? 
     jiffies + msecs_to_jiffies(task_to_yield->period) :
     msecs_to_jiffies(task_to_yield->period);
@@ -337,14 +341,6 @@ printk("YIELD PID %d\n", pid);
   //setup timer
   mod_timer(&(task_to_yield->task_timer), task_to_yield->next_period);
   task_to_yield->task_state = SLEEPING;
-
-  //set current running to null
-  /*
-  if(running_mptask == task_to_yield)
-  {
-    running_mptask = NULL;
-  }
-  */
 
   //wakeup dispatcher and schedule
   wake_up_process(dispatcher);
