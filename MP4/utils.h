@@ -1,8 +1,14 @@
+#include <string.h>
 /**
  * The largest size the message can be that a client
  * sends to the server.
  */
 #define MSG_SIZE (256)
+#define JOB_NUM 1024
+#define JOB_SIZE 1024 * 4
+#define MESSAGE_SIZE_DIGITS 4
+#define ARRAY_SIZE 1024 * 1024 * 4
+static double job_array[ARRAY_SIZE];
 
 /**
  * Builds a message in the form of
@@ -10,7 +16,7 @@
  *
  * Returns a char* to the created message on the heap
  */
-char *create_message(int jobID);
+double *create_message(int job_id, double *data);
 
 /**
  * Read the first four bytes from socket and transform it into ssize_t
@@ -35,7 +41,7 @@ ssize_t write_message_size(size_t size, int socket);
  * Returns the number of bytes read, 0 if socket is disconnected,
  * or -1 on failure.
  */
-ssize_t read_all_from_socket(int socket, char *buffer, size_t count);
+ssize_t read_all_from_socket(int socket, double *buffer, size_t count);
 
 /**
  * Attempts to write all count bytes from buffer to socket.
@@ -44,4 +50,11 @@ ssize_t read_all_from_socket(int socket, char *buffer, size_t count);
  * Returns the number of bytes written, 0 if socket is disconnected,
  * or -1 on failure.
  */
-ssize_t write_all_to_socket(int socket, const char *buffer, size_t count);
+ssize_t write_all_to_socket(int socket, double *buffer, size_t count);
+
+
+void compute(double* vec, int i);
+void compute_with_throttle(double* vec, int i);
+void storeLocal(int jobId, double* data);
+int get_jobid(int socket);
+int write_jobid(int job_id, int socket);

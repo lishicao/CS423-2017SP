@@ -1,17 +1,20 @@
 
 CXX = gcc
-CXXFLAGS = -pthread -std=c++0x -g -O0 -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable
+CXXFLAGS = -pthread -g -O0 -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable
 
-all: clean server client 
+all: clean client server
 
-client: client.c utils.o
-	    $(CXX) $(CXXFLAGS) client.c utils.o -o client
+client: client.c utils.o queue.o
+	    $(CXX) $(CXXFLAGS) client.c utils.o queue.o -o client
 
-server: server.c utils.o 
-	$(CXX) $(CXXFLAGS) server.c utils.o -o server
+server: server.c utils.o queue.o
+	$(CXX) $(CXXFLAGS) server.c utils.o queue.o -o server
 
 utils.o: utils.c utils.h
 	$(CXX) $(CXXFLAGS) -c utils.c -o $@
+
+queue.o: queue.c queue.h
+	  $(CXX) $(CXXFLAGS) -c queue.c -o $@
 
 
 

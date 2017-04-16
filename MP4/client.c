@@ -10,13 +10,21 @@
 #include <unistd.h>
 
 #include "utils.h"
-
+#include "queue.h"
 static volatile int serverSocket;
 static pthread_t threads[2];
 
 void *write_to_server(void *arg);
 void *read_from_server(void *arg);
 void close_program(int signal);
+void bootstrap();
+
+static queue_t *job_todo;
+static queue_t *job_tosend;
+static volatile int job_finished, job_server_done;
+static volatile double throttle_value;
+
+pthread_mutex_t mutex;
 
 /**
  * Clean up for client
@@ -31,6 +39,8 @@ void close_client() {
 //  fprintf(stderr, "shuting down the socket\n");
   shutdown(serverSocket, SHUT_RDWR);
   close(serverSocket);
+  queue_destroy(job_todo);
+  queue_destroy(job_tosend);
 }
 
 /**
@@ -63,40 +73,64 @@ void run_client(const char *host, const char *port) {
     exit(1);
   }
 
+  // initializatin
+  int i;
+  for (i=0; i<ARRAY_SIZE; i++) {
+    job_array[i] = 1.111111;
+  }
+  job_todo = queue_create(JOB_NUM);
+  job_tosend = queue_create(JOB_NUM);
+  job_finished = 0;
+  job_server_done = 0;
+  pthread_mutex_init(&mutex, NULL);
+  bootstrap();
+
   // ---
+  pthread_mutex_lock(&mutex);
   pthread_create(threads, 0, write_to_server, NULL);
   pthread_create(threads+1, 0, read_from_server, NULL);
+  pthread_mutex_unlock(&mutex);
+
+  // perform computation locally
+  pthread_mutex_lock(&mutex);
+  while (job_finished < JOB_NUM) {
+    pthread_mutex_unlock(&mutex);
+    int jobID = (int) ((long) queue_pull(job_todo));
+    if (jobID == -1) continue;
+    compute_with_throttle(job_array, jobID);
+    pthread_mutex_lock(&mutex);
+
+    job_finished += 1;
+    printf("Local computation: job_finished = %d\n", job_finished);
+  }
+  pthread_mutex_unlock(&mutex);
+  printf("local computation has finished\n");
+  queue_push(job_tosend, (void*) -1);
 
   // ---
   pthread_join(threads[0], NULL);
+  printf("thread[0] is joined\n");
   pthread_join(threads[1], NULL);
+  printf("job has finished --> successfully joined 2 threads\n");
+
+  // save job_array to file
+  FILE* fp;
+  fp = fopen("mp4_output.txt", "w+");
+  for(i=0; i<ARRAY_SIZE; i++) {
+    fprintf(fp, "%f\n", job_array[i]);
+  }
 
   freeaddrinfo(result);
 }
 
-typedef struct _thread_cancel_args {
-  char **buffer;
-  char **msg;
-} thread_cancel_args;
-
-/**
- * Cleanup routine in case the thread gets cancelled
- * Ensure buffers are freed if they point to valid memory
- */
-void thread_cancellation_handler(void *arg) {
-  printf("Cancellation handler\n");
-  thread_cancel_args *a = (thread_cancel_args *)arg;
-  char **msg = a->msg;
-  char **buffer = a->buffer;
-  if (*buffer) {
-    free(*buffer);
-    *buffer = NULL;
-  }
-  if (msg && *msg) {
-    free(*msg);
-    *msg = NULL;
+void bootstrap() {
+  int i;
+  for (i=0; i<JOB_NUM/2; i++) {
+    queue_push(job_todo, (void*) ((long) i));
+    queue_push(job_tosend, (void*) ((long) (i+JOB_NUM/2)));
   }
 }
+
 
 /**
  * Reads bytes from user and writes them to server
@@ -105,34 +139,40 @@ void thread_cancellation_handler(void *arg) {
  */
 void *write_to_server(void *arg) {
   char *buffer = NULL;
-  char *msg = NULL;
-  ssize_t retval = 1;
+  double *msg = NULL;
+  int retval = 1;
 
-  thread_cancel_args cancel_args;
-  cancel_args.buffer = &buffer;
-  cancel_args.msg = &msg;
   // Setup thread cancellation handlers
   // Read up on pthread_cancel, thread cancellation states, pthread_cleanup_push
   // for more!
-  pthread_cleanup_push(thread_cancellation_handler, &cancel_args);
 
-  while (retval > 0) {
-    msg = create_message(1);
-    printf("Message sent: %s\n", msg);
-    size_t len = strlen(msg) + 1;
-    retval = write_message_size(len, serverSocket);
+  while (1) {
+    printf("writter enters a NEW loop\n");
+    pthread_mutex_lock(&mutex);
+    if (job_finished == JOB_NUM) {
+      printf("job has finished --> exiting writter\n");
+      pthread_mutex_unlock(&mutex);
+      break;
+    }
+    pthread_mutex_unlock(&mutex);
+    int jobID = (int) ((long) queue_pull(job_tosend));
+    if (jobID < 0) {
+      write_jobid(-1, serverSocket);
+      continue;
+    }
+    msg = create_message(jobID, job_array);
+    printf("Message sent: [%d] (%lu) %f\n", jobID, strlen((char*) msg), msg[0]);
+    retval = write_jobid(jobID, serverSocket);
     if (retval > 0)
-      retval = write_all_to_socket(serverSocket, msg, len);
+      retval = write_all_to_socket(serverSocket, msg, JOB_SIZE*sizeof(double));
 
-    free(msg);
     msg = NULL;
-
-    retval = 0; // TODO
   }
-
-  pthread_cleanup_pop(0);
+  printf("exit writter\n");
   return 0;
 }
+
+
 
 /**
  * Reads bytes from the server and prints them to the user.
@@ -142,26 +182,51 @@ void *write_to_server(void *arg) {
 void *read_from_server(void *arg) {
   // Silence the unused parameter warning
   (void)arg;
-  ssize_t retval = 1;
-  char *buffer = NULL;
-  thread_cancel_args cancellation_args;
-  cancellation_args.buffer = &buffer;
-  cancellation_args.msg = NULL;
-  pthread_cleanup_push(thread_cancellation_handler, &cancellation_args);
-  while (retval > 0) {
-    retval = get_message_size(serverSocket);
-    if (retval > 0) {
-      buffer = calloc(1, retval);
+  int retval = 1;
+  double *buffer = NULL;
+  while (1) {
+    pthread_mutex_lock(&mutex);
+    if (job_finished == JOB_NUM) {
+      printf("job has finished --> exiting reader\n");
+      queue_push(job_todo, (void*) -1);
+      pthread_mutex_unlock(&mutex);
+      break;
+    }
+    pthread_mutex_unlock(&mutex);
+
+    retval = get_jobid(serverSocket);
+    int jobID = retval;
+/*
+    if (retval > -1) {
+      buffer = calloc(1, sizeof(double)*JOB_SIZE);
       retval = read_all_from_socket(serverSocket, buffer, retval);
     }
+
     if (retval > 0) {
       printf("Message received: %s\n", buffer);
     }
+*/
+    if (jobID > -1 && jobID < JOB_NUM) {
+      buffer = calloc(1, sizeof(double)*JOB_SIZE);
+      retval = read_all_from_socket(serverSocket, buffer, sizeof(double) * JOB_SIZE);
+      printf("Message received: [%d] (%lu) %f\n", jobID, strlen((char*) buffer), buffer[0]);
+
+      storeLocal(jobID, buffer);
+      pthread_mutex_lock(&mutex);
+      job_finished += 1;
+      job_server_done += 1;
+      printf("job_finished: %d, job_server_done: %d\n", job_finished, job_server_done);
+      pthread_mutex_unlock(&mutex);
+    }
+    else if (jobID >= JOB_NUM) {
+      queue_push(job_todo, (void*) ((long) (jobID - JOB_NUM)));
+    }
+
     free(buffer);
     buffer = NULL;
   }
 
-  pthread_cleanup_pop(0);
+  printf("exit reader\n");
   return 0;
 }
 
@@ -176,22 +241,15 @@ void close_program(int signal) {
 
 int main(int argc, char **argv) {
 
-  if (argc < 3 || argc > 4) {
-    fprintf(stderr, "Usage: %s <address> <port>\n",
+  if (argc < 4 || argc > 5) {
+    fprintf(stderr, "Usage: %s <address> <port> <throttle>\n",
             argv[0]);
     exit(1);
   }
 
-  char *output_filename;
-  if (argc == 5) {
-    output_filename = argv[4];
-  } else {
-    output_filename = NULL;
-  }
-
   // Setup signal handler
   signal(SIGINT, close_program);
-
+  sscanf(argv[3], "%lf", &throttle_value);
   run_client(argv[1], argv[2]);
 
   return 0;
