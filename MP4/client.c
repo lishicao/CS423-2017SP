@@ -24,7 +24,7 @@ static volatile int job_finished, job_server_done;
 //static volatile double throttle_value;
 
 pthread_mutex_t mutex;
-
+int server_flag=0;
 /**
  * Clean up for client
  * Called by close_program upon SIGINT

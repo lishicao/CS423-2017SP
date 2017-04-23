@@ -18,6 +18,8 @@ volatile float throttle = 1;
 pthread_mutex_t transfer_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t socket_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+int transfer_policy = 0;
+
 double *create_message(int job_id, double *data) {
   //double *msg = (double*) calloc(1, 12);
   //sprintf(msg, "%s", "Hello World!"); // TODO: do I need \n?
@@ -171,7 +173,12 @@ int state_handle(int socket) {
   peer_throttle_value = (float) buffer[1];
   peer_cpu_usage = *(double*)(&buffer[2]);
 
-  adaptor(socket);
+  //transfer policy
+  //0: receiver-initiated
+  //1: sender-initiated
+  //2: symmetric initiated
+  if(transfer_policy==2 || (transfer_policy ^ server_flag))
+    adaptor(socket);
   return 0;
 }
 

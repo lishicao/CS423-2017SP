@@ -23,6 +23,7 @@ extern volatile float throttle;
 extern int peer_num_jobs;
 extern float peer_throttle_value;
 extern double peer_cpu_usage;
+extern int server_flag;
 
 queue_t *job_todo;
 queue_t *job_tosend;

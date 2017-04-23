@@ -24,6 +24,8 @@ static volatile int serverSocket;
 static volatile int clientFd = -1; // only accept 1 client
 
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+//set server indicator
+int server_flag = 1;
 
 void close_server() {
   // Use a signal handler to call this function and close the server
