@@ -73,7 +73,7 @@ int main(int argc, char* argv[])
   sprintf(cmd, "echo 'R %u'> /proc/mp/status", mypid);
   system(cmd);
 
-  // 2. Allocate memory blocks
+  // 2. Allocate memory blocks each block holds 1MB
   for(i=0; i<msize; i++){
     buffer[i] = malloc(1024*1024);
     if(buffer[i] == NULL){

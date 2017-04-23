@@ -144,23 +144,10 @@ static int dev_mmap(struct file *filp, struct vm_area_struct *vma){
                 printk(KERN_INFO "Inside While %d\n", size);
 
                 /* remap a single physical page to the process's vma */
-                //TODO!!!!
                 printk("vmalloc_to_page %x\n", vmalloc_to_page( (void*) pos ));
                 pfn = vmalloc_to_pfn((void *)pos);
                 printk("vmalloc_to_pfn %x, pos %x\n", pfn, pos);
 
-                //struct page *page;
-                //page = vmalloc_to_page( pos );
-
-                /* fourth argument is the protection of the map. you might
-                 * want to use vma->vm_page_prot instead.
-                 */
-                //TODO
-                //int ret = 0;
-                //if( ( ret = vm_insert_page(vma, start, page) ) < 0 ) 
-                //{
-                //  return ret;
-                //}
                 if (remap_pfn_range(vma, start, pfn, PAGE_SIZE, vma->vm_page_prot) )
                 {
                   printk(KERN_ALERT "ERROR REMAP PFN\n");
@@ -193,7 +180,6 @@ void registration(char* buf) {
   printk("enter registration()\n");
   //return 0;
   
-  // TODO: potential bug here
   int empty_flag = list_empty(&head);
   printk("EMPTY FLAG: %d\n", empty_flag);
 
@@ -245,7 +231,6 @@ void unregistration(char* buf)
   spin_unlock(&mylock);
   // critical section end
 
-  // TODO potential bug here
   if (list_empty(&head)) {  // PCB list is empty after deletion
     cancel_delayed_work(&mp_delayed_work);
     flush_workqueue(wq);
@@ -253,11 +238,7 @@ void unregistration(char* buf)
   }
   kfree(task_to_remove);
 
-
-  // TODO
   printk("content in mem_buf: %lu\n", mem_buf);
-
-
 }
 
 /**
@@ -272,6 +253,8 @@ static void mp_work_func(struct work_struct *work) {
   // critical section begin  
   spin_lock(&mylock);
   struct mp_task_struct *entry;
+
+  // go through the registered process, read stats about it, if success, write to profiler buffer
   list_for_each_entry(entry, &head, task_node) {
     if (get_cpu_use(entry->pid, &min_flt, &maj_flt, &utime, &stime) == -1) {
       continue;
@@ -299,7 +282,6 @@ static void mp_work_func(struct work_struct *work) {
   spin_unlock(&mylock);
   // critical section end
 
-
   printk("after writing, mem_buf_ptr is %d\n", mem_buf_ptr);
 
   if (mem_buf_ptr > PAGE_NUM * PAGE_SIZE / sizeof(unsigned long)) {
@@ -320,50 +302,37 @@ static const struct file_operations mp_file = {
 mp_init - Called when module is loaded
 create proc directory and file
 */
+  unsigned long start;
 int __init mp_init(void)
 {
+
   #ifdef DEBUG
   printk(KERN_ALERT "MP3 MODULE LOADING\n");
   #endif
+  start = jiffies;
   proc_dir =  proc_mkdir("mp",NULL);
   proc_create("status",0666, proc_dir, &mp_file);
   spin_lock_init(&mylock);
 
-  // TODO potential bug here
   mem_buf = (unsigned long*) vmalloc(PAGE_NUM * PAGE_SIZE);
   memset(mem_buf, 0, PAGE_NUM * PAGE_SIZE);
 
-  //mem_buf = (unsigned long*) kmalloc(PAGE_NUM * PAGE_SIZE, GFP_KERNEL);
-
-  //mem_buf = (unsigned long*) vmalloc(4096);
+  // check if enough memory is successfully allocated
   if( !mem_buf ) 
   {
     printk("VMALLOC ERROR\n");
   }
   printk("mem_buf is %x\n", mem_buf);
 
-
-  /*
-  void* vptr = vmalloc(PAGE_NUM * PAGE_SIZE);
-  if(vptr==NULL)
-  {
-    printk("VMALLOC ERROR\n");
-    return 0;
-  }
-  int* ptr = (int*) vptr;
-  *ptr = 1;
-  printk("vptr is %x  %x\n", vptr, (unsigned long*) vptr);
-  printk("ptr value is %d\n", *ptr);
-  vfree(vptr);
-  */
-
   if (mem_buf == NULL) {
     printk("WTF: mem_buff is NULL\n");
   }
 
+  // create work queue struct
   wq = create_workqueue("mp_queue");
   delay = msecs_to_jiffies(50);
 
+  // print dev number for the use of make node
   cdev_init(&chrdev, &dev_file);
   majorNumber = register_chrdev(0, "MP3", &dev_file);
   printk(KERN_ALERT "MAJOR NUMBER: %d\n", majorNumber);
@@ -372,6 +341,7 @@ int __init mp_init(void)
   wq = create_workqueue("mp_queue");
 
   printk(KERN_ALERT "MP3 MODULE LOADED\n");
+  printk("%ld \n", start);
   return 0;
 }
 
@@ -386,7 +356,8 @@ void __exit mp_exit(void)
   #ifdef DEBUG
   printk(KERN_ALERT "MP3 MODULE UNLOADING\n");
   #endif
-
+  
+  printk("%ld %ld jiffies to msecs\n", jiffies-start, jiffies_to_msecs(jiffies-start));
   unregister_chrdev(majorNumber, "MP3");
 
   struct mp_task_struct *entry;

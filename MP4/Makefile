@@ -1,6 +1,6 @@
 
 CXX = gcc
-CXXFLAGS = -pthread -g -O0 -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable
+CXXFLAGS = -pthread -g -O0 -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable -Wunused-but-set-variable
 
 all: clean client server
 

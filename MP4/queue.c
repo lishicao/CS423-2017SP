@@ -1,29 +1,11 @@
 #include "queue.h"
-#include <pthread.h>
-#include <stdio.h>
-#include <stdlib.h>
 
 /**
  * Struct representing a node in a queue_t
  */
-typedef struct queue_node_t {
-
-  struct queue_node_t *next;
-  void *data;
-} queue_node_t;
-
 /**
  * Struct representing a queue
  */
-struct queue_t {
-
-  queue_node_t *head, *tail;
-  int size;
-  int maxSize;
-  pthread_cond_t cv;
-  pthread_mutex_t m;
-};
-
 /**
  *  Given data, place it on the queue.  Can be called by multiple threads.
  *  Blocks if the queue is full.

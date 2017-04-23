@@ -1,14 +1,33 @@
+#ifndef _UTILSH_
+#define _UTILSH_
+
 #include <string.h>
+#include "queue.h"
+#include <stdio.h>
 /**
  * The largest size the message can be that a client
  * sends to the server.
  */
 #define MSG_SIZE (256)
-#define JOB_NUM 1024
-#define JOB_SIZE 1024 * 4
+#define JOB_NUM 1024      // the whole job can be divided into this many jobs, using the job size below
+#define JOB_SIZE 1024 * 4 // each job covers this many entries in the array
 #define MESSAGE_SIZE_DIGITS 4
 #define ARRAY_SIZE 1024 * 1024 * 4
-static double job_array[ARRAY_SIZE];
+#define MSG_TYPE_DATA 0
+#define MSG_TYPE_STATE -1
+#define INFO_PERIOD 1
+#define DIFF_THRESHOLD 5
+
+extern volatile float throttle;
+
+extern int peer_num_jobs;
+extern float peer_throttle_value;
+extern double peer_cpu_usage;
+
+queue_t *job_todo;
+queue_t *job_tosend;
+double job_array[ARRAY_SIZE];
+double monitor_utilization;
 
 /**
  * Builds a message in the form of
@@ -41,7 +60,7 @@ ssize_t write_message_size(size_t size, int socket);
  * Returns the number of bytes read, 0 if socket is disconnected,
  * or -1 on failure.
  */
-ssize_t read_all_from_socket(int socket, double *buffer, size_t count);
+ssize_t read_all_from_socket(int socket, char *buffer, size_t count);
 
 /**
  * Attempts to write all count bytes from buffer to socket.
@@ -50,7 +69,7 @@ ssize_t read_all_from_socket(int socket, double *buffer, size_t count);
  * Returns the number of bytes written, 0 if socket is disconnected,
  * or -1 on failure.
  */
-ssize_t write_all_to_socket(int socket, double *buffer, size_t count);
+ssize_t write_all_to_socket(int socket, char *buffer, size_t count);
 
 
 void compute(double* vec, int i);
@@ -58,3 +77,11 @@ void compute_with_throttle(double* vec, int i);
 void storeLocal(int jobId, double* data);
 int get_jobid(int socket);
 int write_jobid(int job_id, int socket);
+int send_msg_type(int value, int socket);
+int send_state(int num_jobs, float throttle, double cpu_utilization, int socket);
+int get_msg_type(int socket);
+int state_handle(int socket);
+int adaptor(int socket);
+int transfer(int jobID, int socket);
+void *update_throttle(void *p);
+#endif

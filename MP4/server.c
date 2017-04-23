@@ -16,12 +16,10 @@
 void *process_client(void *p);
 void *write_to_clients(void *p);
 void *compute_worker(void *p);
+void* state_manager(void *p);
 
 static volatile int sessionEnd;
 static volatile int serverSocket;
-
-static queue_t *job_todo;
-static queue_t *job_tosend;
 
 static volatile int clientFd = -1; // only accept 1 client
 
@@ -71,6 +69,7 @@ void run_server(char *port) {
   for (i=0; i<ARRAY_SIZE; i++) {
     job_array[i] = 1.111111;
   }
+  //printf("job array address %p\n", job_array);
   job_todo = queue_create(JOB_NUM);
   job_tosend = queue_create(JOB_NUM);
 
@@ -111,6 +110,12 @@ void run_server(char *port) {
     pthread_t send_thread;
     pthread_create(&send_thread, NULL, write_to_clients, NULL);
 
+    pthread_t state_thread;
+    pthread_create(&state_thread, NULL, state_manager, NULL);
+
+    pthread_t monitor_thread;
+    pthread_create(&monitor_thread, NULL, update_throttle, NULL);
+
     if (retval != 0) {
       perror("pthread_create():");
       exit(1);
@@ -123,44 +128,35 @@ void run_server(char *port) {
 void *write_to_clients(void *p) {
   (void) p;
   int retval = 1;
-  double *msg = NULL;
 
   while (sessionEnd == 0) {
     int jobID = (int)(long) queue_pull(job_tosend);
+
+    //return result back
+    retval = transfer(jobID, clientFd);
+    if(retval)
+      printf("transfer job error jobID%d\n", jobID);
+
+    //finished job
     if(jobID == -1) {
-      write_jobid(jobID, clientFd);
-      // make it ready for new jobs
-      //clientFd = -1;
-      printf("Job finished. GoodBye!\n");
       sleep(2);
-      //raise(SIGINT);
-      kill(getpid(), SIGINT); 
+      printf("Job finished. GoodBye!\n");
+      kill(getpid(), SIGINT);
       continue;
     }
-    msg = create_message(jobID, job_array);
-    printf("Message sent: [%d] %f\n", jobID, msg[0]);
-    retval = write_jobid(jobID, clientFd);
-    if (retval > 0)
-      retval = write_all_to_socket(clientFd, msg, JOB_SIZE*sizeof(double));
-
-    msg = NULL;
   }
 
   return NULL;
 }
 
-void *process_client(void *p) {
-  pthread_detach(pthread_self());
-  int retval = 1;
-  double *buffer = NULL;
-
-  //while (retval > -1 && sessionEnd == 0) {
-  while( sessionEnd == 0 ) {
-    retval = get_jobid(clientFd);
+void transfer_handler() {
+		double *buffer = NULL;
+    int retval = get_jobid(clientFd);
+    printf("receiving job_id: %d, \n", retval);
     if(retval == -1) {
       //signal to finished job
       queue_push(job_tosend, (void*) (long) -1);
-      continue;
+      return;
     }
 
     //printf("Receiving JobID: %d\n", retval);
@@ -168,17 +164,40 @@ void *process_client(void *p) {
 
     if (retval > -1) {
       buffer = calloc(1, sizeof(double)*JOB_SIZE);
-      retval = read_all_from_socket(clientFd, buffer, sizeof(double) * JOB_SIZE);
+			memset((void*)buffer, 0, sizeof(double)*JOB_SIZE);
+      retval = read_all_from_socket(clientFd, (char*)buffer, sizeof(double) * JOB_SIZE);
+      //printf("retval is %d\n", retval); 
       printf("Receiving First Element: %f; Length is %lu\n", buffer[0], strlen((char*)buffer));
     }
 
     if (jobID > -1) {
+      if(jobID > JOB_NUM)
+        jobID -= JOB_NUM;
+      printf("adding jobid %d\n", jobID);
       storeLocal(jobID, buffer);
       queue_push(job_todo, (void*)(long)jobID);
     }
 
     free(buffer);
-    buffer = NULL;
+    buffer = NULL;  
+}
+
+void *process_client(void *p) {
+  pthread_detach(pthread_self());
+  int retval = 1;
+
+  //while (retval > -1 && sessionEnd == 0) {
+  while( sessionEnd == 0 ) {
+    int msg_type = get_msg_type(clientFd);
+    //printf("receiving - msg_type: %d\n", msg_type);
+    if(msg_type==0) {
+      transfer_handler();
+    } else if(msg_type==-1) {
+      state_handle(clientFd);
+    } else {
+      printf("Unknown Message Type: %d\n", msg_type);
+      return NULL;
+    }
   }
 
   close(clientFd);
@@ -195,11 +214,24 @@ void *compute_worker(void *p) {
   pthread_detach(pthread_self());
   int jobID;
   while( (jobID = (int)(long)queue_pull(job_todo)) > -1) {
-    printf("Computing for %d\n", jobID);
+    //printf("Computing for %d\n", jobID);
 
     compute_with_throttle(job_array, jobID);
     queue_push(job_tosend, (void*)(long)jobID);
   }
+  return NULL;
+}
+
+void* state_manager(void *p) {
+  pthread_detach(pthread_self());
+  printf("State Manager Started\n");
+
+  while(1) {
+    //printf("sending state\n");
+    send_state(job_todo->size, throttle, monitor_utilization, clientFd);
+    sleep(INFO_PERIOD);
+  }
+
   return NULL;
 }
 
