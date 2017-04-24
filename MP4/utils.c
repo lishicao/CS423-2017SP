@@ -18,7 +18,9 @@ volatile float throttle = 1;
 pthread_mutex_t transfer_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t socket_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-int transfer_policy = 0;
+int transfer_policy = 1;
+int rebalance_requested = 0;
+int job_sent = 0;
 
 double *create_message(int job_id, double *data) {
   //double *msg = (double*) calloc(1, 12);
@@ -55,6 +57,7 @@ int get_single_value(int socket) {
   return (int)ntohl(job_id);
 }
 
+// this is a get message, supposedly this is a bit redundant 
 int get_msg_type(int socket) {
   return get_single_value(socket);
 }
@@ -63,6 +66,7 @@ int get_jobid(int socket) {
   return get_single_value(socket);
 }
 
+// this function is a bit redundant with the send_msg_type, to send one value
 int send_single_value(int value, int socket) {
   uint32_t hostlong = htonl((uint32_t) value);
   //the message_size_digits is the size of jobID, which is to be written ot the server.
@@ -75,6 +79,7 @@ int write_jobid(int job_id, int socket) {
   return send_single_value(job_id, socket);
 }
 
+// this is to send one signle byte, with return value to be the bytes written
 int send_msg_type(int value, int socket) {
   //printf("send msg_type %d \n", value);
   return send_single_value(value, socket);
@@ -174,28 +179,42 @@ int state_handle(int socket) {
   peer_cpu_usage = *(double*)(&buffer[2]);
 
   //transfer policy
-  //0: receiver-initiated
-  //1: sender-initiated
+  //0: sender-initiated
+  //1: receiver-initiated
   //2: symmetric initiated
-  if(transfer_policy==2 || (transfer_policy ^ server_flag))
-    adaptor(socket);
+  //if(transfer_policy==2 || (transfer_policy ^ server_flag))
+  adaptor(socket);
   return 0;
 }
 
 int adaptor(int socket) {
   //return 0;
-  printf("Entered Adaptor! Local Job Size: %d, Peer Job Size: %d, current throttle value %f \n", job_todo->size, peer_num_jobs, throttle);
+  printf("Local Job Size: %d, Peer Job Size: %d, Throttle Value %f \n", job_todo->size, peer_num_jobs, throttle);
   int diff = job_todo->size - peer_num_jobs;
   int to_transfer = diff/2;
+
+
+  //transfer policy
+  //0: sender-initiated
+  //1: receiver-initiated
+  //2: symmetric initiated
   
-  //return 0; 
-  if(diff > DIFF_THRESHOLD && peer_num_jobs != -1) {
+  //underload & ask remote to rebalance 
+  if(transfer_policy >0 && diff < DIFF_THRESHOLD) {
+    pthread_mutex_lock(&transfer_mutex);
+    send_msg_type(MSG_TYPE_REBALANCE, socket);
+    pthread_mutex_unlock(&transfer_mutex);
+  }
+
+  //overload & transfer jobs to remote 
+  if(diff > DIFF_THRESHOLD && peer_num_jobs != -1 && (transfer_policy==0 || transfer_policy==2 || rebalance_requested)) {
     //moving job
     int jobID = 0;
     while( to_transfer>0 && (jobID = (int)(long)queue_pull(job_todo)) > -1) {
       printf("[LAOD BALANCE] sending jobID: %d\n", jobID);
       //adding JOB_NUM to indicate not yet computed jobs
       transfer(JOB_NUM+jobID, socket);
+      job_sent++;
       to_transfer--;
     }
   }

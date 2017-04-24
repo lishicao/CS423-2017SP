@@ -15,6 +15,7 @@
 #define ARRAY_SIZE 1024 * 1024 * 4
 #define MSG_TYPE_DATA 0
 #define MSG_TYPE_STATE -1
+#define MSG_TYPE_REBALANCE 2
 #define INFO_PERIOD 1
 #define DIFF_THRESHOLD 5
 
@@ -24,11 +25,15 @@ extern int peer_num_jobs;
 extern float peer_throttle_value;
 extern double peer_cpu_usage;
 extern int server_flag;
+extern int transfer_policy;
+extern int rebalance_requested;
+extern int job_sent;
 
 queue_t *job_todo;
 queue_t *job_tosend;
 double job_array[ARRAY_SIZE];
 double monitor_utilization;
+
 
 /**
  * Builds a message in the form of

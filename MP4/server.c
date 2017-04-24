@@ -142,7 +142,7 @@ void *write_to_clients(void *p) {
     //finished job
     if(jobID == -1) {
       sleep(2);
-      printf("Job finished. GoodBye!\n");
+      printf("Job sent: %d. GoodBye!\n", job_sent);
       kill(getpid(), SIGINT);
       continue;
     }
@@ -154,7 +154,7 @@ void *write_to_clients(void *p) {
 void transfer_handler() {
 		double *buffer = NULL;
     int retval = get_jobid(clientFd);
-    printf("receiving job_id: %d, \n", retval);
+    //printf("receiving job_id: %d, \n", retval);
     if(retval == -1) {
       //signal to finished job
       queue_push(job_tosend, (void*) (long) -1);
@@ -169,13 +169,13 @@ void transfer_handler() {
 			memset((void*)buffer, 0, sizeof(double)*JOB_SIZE);
       retval = read_all_from_socket(clientFd, (char*)buffer, sizeof(double) * JOB_SIZE);
       //printf("retval is %d\n", retval); 
-      printf("Receiving First Element: %f; Length is %lu\n", buffer[0], strlen((char*)buffer));
+      printf("Receiving JobID: %d; 1st Value: %f; Length is %lu\n", jobID, buffer[0], strlen((char*)buffer));
     }
 
     if (jobID > -1) {
       if(jobID > JOB_NUM)
         jobID -= JOB_NUM;
-      printf("adding jobid %d\n", jobID);
+      //printf("adding jobid %d\n", jobID);
       storeLocal(jobID, buffer);
       queue_push(job_todo, (void*)(long)jobID);
     }
@@ -196,6 +196,8 @@ void *process_client(void *p) {
       transfer_handler();
     } else if(msg_type==-1) {
       state_handle(clientFd);
+    } else if(msg_type==2) {
+      rebalance_requested = 1;
     } else {
       printf("Unknown Message Type: %d\n", msg_type);
       return NULL;
